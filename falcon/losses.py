@@ -145,13 +145,21 @@ class ReIDCriterion(nn.Module):
         triplet_loss, stats = self.triplet(triplet_features, labels, cameras)
         total = self.id_weight * id_loss + self.triplet_weight * triplet_loss
 
-        parts = {"id": float(id_loss), "triplet": float(triplet_loss), **stats}
+        center_loss = None
         if self.center is not None:
             center_loss = self.center(triplet_features, labels)
             total = total + self.center_weight * center_loss
-            parts["center"] = float(center_loss)
 
+        # Все числа для журнала снимаются под no_grad и через detach: иначе
+        # обращение float(tensor) к тензору с градиентом тянет за собой граф.
         with torch.no_grad():
-            parts["accuracy"] = float((logits.argmax(dim=1) == labels).float().mean())
-        parts["total"] = float(total)
+            parts = {
+                "id": float(id_loss.detach()),
+                "triplet": float(triplet_loss.detach()),
+                "accuracy": float((logits.argmax(dim=1) == labels).float().mean()),
+                "total": float(total.detach()),
+                **stats,
+            }
+            if center_loss is not None:
+                parts["center"] = float(center_loss.detach())
         return total, parts
