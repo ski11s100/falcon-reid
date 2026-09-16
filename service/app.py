@@ -18,11 +18,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
+import torch
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
+from falcon.explain import GradCAM, overlay_heatmap, plate_attention
 from falcon.extract import ExtractorConfig, FeatureExtractor
 from falcon.model import VehicleReID
 
@@ -30,7 +32,10 @@ from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
 from .schemas import (
     Candidate,
+    ExplainRequest,
+    ExplainResponse,
     HealthResponse,
+    PlateAttention,
     QualityReport,
     RegisterRequest,
     RegisterResponse,
@@ -252,6 +257,48 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
         threshold=threshold,
         matches=[c for c in candidates if c.score >= threshold] if accepted else [],
         candidates=candidates, quality=quality, elapsed_ms=elapsed)
+
+
+@app.post("/api/explain", response_model=ExplainResponse, tags=["Поиск"],
+          summary="Показать, какие области повлияли на сопоставление")
+def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
+            extractor: FeatureExtractor = Depends(require_model),
+            repository: VectorRepository = Depends(require_repository)) -> ExplainResponse:
+    """Grad-CAM по близости запроса к конкретному кандидату из галереи.
+
+    Раздел 10 ТЗ просит визуализацию областей, повлиявших на решение о
+    сопоставлении, — она повышает доверие оператора к результату. Заодно
+    считается доля внимания в зоне вероятного номера: пользоваться его
+    признаками запрещено, и полезно иметь возможность это проверить.
+    """
+    started = time.perf_counter()
+    reference = repository.embedding_of(request.gallery_id)
+    if reference is None:
+        raise HTTPException(status_code=404, detail="Кандидат не найден в галерее")
+
+    image = decode_image(request.image_base64, settings.max_upload_mb * 1024 * 1024)
+    crop = crop_to_bbox(image, request.bbox)
+
+    # Градиенты считаются по отдельной fp32-копии модели: рабочий путь инференса
+    # идёт в half и трогать его ради объяснения нельзя.
+    tensor = extractor.transform(crop).unsqueeze(0).to(extractor.device)
+    with GradCAM(extractor.explain_model) as cam:
+        heatmap = cam.similarity_map(tensor, torch.from_numpy(reference))
+
+    overlay = overlay_heatmap(crop, heatmap)
+    buffer = io.BytesIO()
+    overlay.save(buffer, format="PNG")
+
+    similarity = float(np.dot(embed(extractor, crop), reference / np.linalg.norm(reference)))
+    plate = plate_attention(heatmap).as_dict() if request.show_plate_region else None
+
+    return ExplainResponse(
+        gallery_id=request.gallery_id,
+        similarity=round(similarity, 6),
+        overlay_png_base64=base64.b64encode(buffer.getvalue()).decode(),
+        plate_region=PlateAttention(**plate) if plate else None,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
 
 
 @app.get("/api/gallery", tags=["Галерея"], summary="Сводка по галерее")

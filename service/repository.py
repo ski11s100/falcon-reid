@@ -47,6 +47,7 @@ class VectorRepository(Protocol):
     def initialise(self, dimension: int) -> None: ...
     def upsert(self, items: list[GalleryItem]) -> int: ...
     def search(self, embedding: np.ndarray, top_k: int) -> list[Match]: ...
+    def embedding_of(self, image_id: str) -> np.ndarray | None: ...
     def delete(self, image_id: str) -> bool: ...
     def count(self) -> int: ...
     def list_vehicles(self, limit: int = 100) -> list[dict]: ...
@@ -127,6 +128,12 @@ class PgVectorRepository:
                 (vector, vector, top_k),
             )
             return [Match(r[0], r[1], float(r[2]), r[3] or {}) for r in cursor.fetchall()]
+
+    def embedding_of(self, image_id: str) -> np.ndarray | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(f"SELECT embedding FROM {self.table} WHERE image_id = %s", (image_id,))
+            row = cursor.fetchone()
+        return np.asarray(row[0], dtype=np.float32) if row else None
 
     def delete(self, image_id: str) -> bool:
         with self._lock, self.connection.cursor() as cursor:
@@ -211,6 +218,12 @@ class SQLiteRepository:
         order = np.argsort(-scores, kind="stable")[:top_k]
         return [Match(rows[i][0], rows[i][1], float(scores[i]), json.loads(rows[i][3]))
                 for i in order]
+
+    def embedding_of(self, image_id: str) -> np.ndarray | None:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT embedding FROM gallery WHERE image_id = ?", (image_id,)).fetchone()
+        return np.frombuffer(row[0], dtype=np.float32).copy() if row else None
 
     def delete(self, image_id: str) -> bool:
         with self._lock:

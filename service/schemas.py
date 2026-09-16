@@ -95,6 +95,33 @@ class RegisterResponse(BaseModel):
     elapsed_ms: float
 
 
+class ExplainRequest(ImagePayload):
+    """Запрос объяснения: почему модель считает эти два снимка одной машиной."""
+
+    gallery_id: str = Field(description="Идентификатор кандидата из галереи")
+    show_plate_region: bool = Field(
+        default=True,
+        description="Дополнительно оценить долю внимания в зоне вероятного номера",
+    )
+
+
+class PlateAttention(BaseModel):
+    attention_share: float = Field(description="Доля внимания, попавшая в зону номера")
+    region_area_share: float = Field(description="Доля площади кропа, занятая зоной")
+    concentration: float = Field(description="Внимание к площади; около 1 — зона не выделена")
+    verdict: str
+
+
+class ExplainResponse(BaseModel):
+    """Карта важности областей. Раздел 10 ТЗ: интерпретируемость решения."""
+
+    gallery_id: str
+    similarity: float
+    overlay_png_base64: str = Field(description="Кроп с наложенной картой важности")
+    plate_region: PlateAttention | None = None
+    elapsed_ms: float
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     model: str

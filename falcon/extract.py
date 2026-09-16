@@ -94,8 +94,19 @@ class FeatureExtractor:
         self.model.eval().to(self.device)
         if self.config.channels_last:
             self.model = self.model.to(memory_format=torch.channels_last)
-        if self.config.half:
+
+        # Рабочий путь идёт по заранее сконвертированным half-весам: это быстрее
+        # autocast на batch=1 примерно в полтора раза, а latency batch=1 — половина
+        # балла за производительность. Grad-CAM работает с отдельной fp32-копией
+        # (см. explain_model): градиенты в half неустойчивы, а конвертировать
+        # модель туда-обратно на каждый запрос — это десятки секунд.
+        self._explain_model: VehicleReID | None = None
+        if self.config.half and self.device.type == "cuda":
+            self._fp32_state = {k: v.detach().clone()
+                                for k, v in self.model.state_dict().items()}
             self.model = self.model.half()
+        else:
+            self._fp32_state = None
 
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -108,7 +119,8 @@ class FeatureExtractor:
         batch = batch.to(self.device, non_blocking=True)
         if self.config.channels_last:
             batch = batch.contiguous(memory_format=torch.channels_last)
-        if self.config.half:
+
+        if self.config.half and self.device.type == "cuda":
             batch = batch.half()
 
         with torch.inference_mode():
@@ -140,6 +152,24 @@ class FeatureExtractor:
                 rate = done / max(1e-9, time.perf_counter() - started)
                 print(json.dumps({"extracted": done, "total": len(rows), "fps": round(rate, 1)}), flush=True)
         return output
+
+    @property
+    def explain_model(self) -> VehicleReID:
+        """Копия модели в fp32 для расчёта градиентов (Grad-CAM).
+
+        Создаётся лениво и только если основная модель работает в half: держать
+        её постоянно нет смысла, объяснение запрашивается редко. Занимает около
+        107 МБ видеопамяти при пиковых 505 МБ на инференсе.
+        """
+        if self._fp32_state is None:
+            return self.model
+        if self._explain_model is None:
+            model = build_model(num_classes=self.model.num_classes,
+                                embedding_dim=self.model.feature_dim,
+                                pretrained=False, verbose=False)
+            model.load_state_dict(self._fp32_state, strict=True)
+            self._explain_model = model.eval().to(self.device)
+        return self._explain_model
 
     def encode_image(self, crop) -> np.ndarray:
         """Эмбеддинг готового кропа ТС (PIL.Image). Точка входа для сервиса."""
