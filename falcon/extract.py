@@ -124,12 +124,24 @@ class FeatureExtractor:
             batch = batch.half()
 
         with torch.inference_mode():
-            features = self.model(batch)
             if self.config.flip_tta:
                 # Отражение по горизонтали — единственная TTA, разрешённая ответом 38
-                # (на уровне одного изображения). Стоит один лишний forward,
-                # а бюджет по скорости у нас с большим запасом.
-                features = features + self.model(torch.flip(batch, dims=[3]))
+                # (на уровне одного изображения).
+                #
+                # Оригинал и отражение идут ОДНИМ батчем, а не двумя вызовами.
+                # Два отдельных forward оказались втрое дороже ожидаемого: flip
+                # возвращает тензор, потерявший раскладку channels_last, и cuDNN
+                # уходит на медленный путь с переупаковкой памяти. Склейка с
+                # явным восстановлением contiguous(channels_last) убирает это и
+                # заодно лучше загружает GPU при batch=1.
+                flipped = torch.flip(batch, dims=[3])
+                merged = torch.cat([batch, flipped], dim=0)
+                if self.config.channels_last:
+                    merged = merged.contiguous(memory_format=torch.channels_last)
+                both = self.model(merged)
+                features = both[: len(batch)] + both[len(batch):]
+            else:
+                features = self.model(batch)
         return torch.nn.functional.normalize(features.float(), dim=1)
 
     def extract(self, rows: list[Observation], progress: bool = True) -> np.ndarray:
