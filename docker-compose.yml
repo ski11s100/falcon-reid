@@ -1,0 +1,61 @@
+# Запуск всего решения одной командой: docker compose up
+#
+# Раздел 6 ТЗ требует микросервисного разделения ответственности и векторной
+# либо реляционной СУБД, называя PostgreSQL с pgvector в качестве примера.
+# Здесь три роли разведены по контейнерам:
+#   postgres — хранение эмбеддингов галереи и метаданных, индекс HNSW;
+#   api      — инференс ReID-модели и HTTP-контракт с OpenAPI;
+#   клиент   — статика, отдаётся сервисом api, работает в браузере.
+
+services:
+  postgres:
+    # Официальный образ pgvector: расширение уже собрано, ставить нечего.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: falcon
+      POSTGRES_PASSWORD: falcon
+      POSTGRES_DB: falcon
+    volumes:
+      - falcon-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U falcon -d falcon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        # Сервис создаёт таблицу и индекс на старте, поэтому ждём готовности БД,
+        # а не просто запуска контейнера.
+        condition: service_healthy
+    environment:
+      FALCON_DATABASE_DSN: postgresql://falcon:falcon@postgres:5432/falcon
+      FALCON_CHECKPOINT: /opt/falcon/models/best.pt
+      FALCON_DEVICE: cuda
+      FALCON_HOST: "0.0.0.0"
+      FALCON_PORT: "8000"
+      # Порог отказа задаётся только после калибровки на валидации.
+      # Пустое значение означает «не откалиброван»: сервис показывает
+      # кандидатов, но не подтверждает совпадение. Это осознанное поведение.
+      # FALCON_MATCH_THRESHOLD: "0.??"
+    ports:
+      - "8000:8000"
+    volumes:
+      - falcon-data:/opt/falcon/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  falcon-db:
+  falcon-data:

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ФАЛЬКОН — цифровой признак транспортного средства</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="header__inner">
+    <h1 class="wordmark"><span class="wordmark__mark"></span>Фалькон</h1>
+    <p class="tagline">Поиск транспортного средства<br>по визуальным признакам без номера</p>
+  </div>
+</header>
+
+<div class="status" id="status">
+  <div class="status__cell">
+    <span class="status__label">Состояние</span>
+    <span class="status__value" id="st-status">—</span>
+  </div>
+  <div class="status__cell">
+    <span class="status__label">Модель</span>
+    <span class="status__value" id="st-model">—</span>
+  </div>
+  <div class="status__cell">
+    <span class="status__label">Устройство</span>
+    <span class="status__value" id="st-device">—</span>
+  </div>
+  <div class="status__cell">
+    <span class="status__label">Галерея</span>
+    <span class="status__value" id="st-gallery">—</span>
+  </div>
+  <div class="status__cell">
+    <span class="status__label">Порог отказа</span>
+    <span class="status__value" id="st-threshold">—</span>
+  </div>
+</div>
+
+<main class="layout">
+
+  <section class="panel">
+    <div class="panel__head">
+      <span class="panel__num">1</span>
+      <h2 class="panel__title">Запрос</h2>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="file">Кадр с камеры</label>
+      <input type="file" id="file" accept="image/jpeg,image/png">
+      <p class="hint">Полный кадр в исходном разрешении. Детекция в задачу не входит —
+        рамку задаёт внешняя система.</p>
+    </div>
+
+    <div class="field">
+      <label class="field__label">Рамка транспортного средства, пиксели</label>
+      <div class="bbox-grid">
+        <input type="number" id="bx" placeholder="X" min="0" step="1">
+        <input type="number" id="by" placeholder="Y" min="0" step="1">
+        <input type="number" id="bw" placeholder="Ш" min="2" step="1">
+        <input type="number" id="bh" placeholder="В" min="2" step="1">
+      </div>
+      <p class="hint">Оставьте пустым, если загружаете уже вырезанный автомобиль.</p>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="vehicle">Идентификатор ТС для регистрации</label>
+      <input type="text" id="vehicle" placeholder="например, car-0417" maxlength="120">
+    </div>
+
+    <div class="actions">
+      <button class="button" id="btn-search" disabled>Найти</button>
+      <button class="button button--ghost" id="btn-register" disabled>В галерею</button>
+    </div>
+
+    <div class="preview" id="preview">
+      <p class="preview__empty">Кадр не загружен</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel__head">
+      <span class="panel__num">2</span>
+      <h2 class="panel__title">Результат</h2>
+    </div>
+    <div id="result">
+      <div class="empty-state">Загрузите кадр и запустите поиск</div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span>Совпадение оценивается по визуальным признакам: форма кузова, цвет, диски, наклейки, повреждения</span>
+  <span><a href="/docs">Спецификация OpenAPI</a></span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

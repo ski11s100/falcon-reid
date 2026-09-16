@@ -1,0 +1,23 @@
+# Окружение
+.venv/
+__pycache__/
+*.py[cod]
+.env
+
+# Данные и результаты обучения
+data/
+runs/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Веса: в репозиторий кладётся только итоговый models/best.pt,
+# промежуточные чекпоинты обучения — нет.
+runs/**/*.pt
+runs/**/*.npy
+
+# Служебное
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

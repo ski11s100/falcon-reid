@@ -1,0 +1,241 @@
+"""Хранилище галереи эмбеддингов.
+
+Раздел 6 ТЗ требует реляционную, документо-ориентированную или векторную СУБД и
+называет в качестве примеров PostgreSQL с pgvector, FAISS и Milvus. Основная
+реализация — PostgreSQL + pgvector: это честная СУБД с транзакциями и
+метаданными, а не отдельный индекс рядом с базой.
+
+Хранилище спрятано за протоколом намеренно. Это позволяет:
+  * поднимать сервис локально без Postgres (SQLite-реализация) при разработке;
+  * подключить приближённый поиск (HNSW) той же ручкой — раздел 10 ТЗ просит
+    продемонстрировать ANN на галерее порядка 10^6 объектов.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import numpy as np
+
+
+@dataclass(frozen=True)
+class GalleryItem:
+    """Запись галереи: наблюдение ТС с его эмбеддингом и метаданными."""
+
+    image_id: str
+    vehicle_id: str | None
+    embedding: np.ndarray
+    metadata: dict
+
+
+@dataclass(frozen=True)
+class Match:
+    image_id: str
+    vehicle_id: str | None
+    score: float
+    metadata: dict
+
+
+class VectorRepository(Protocol):
+    """Контракт хранилища. Реализации взаимозаменяемы для сервиса."""
+
+    def initialise(self, dimension: int) -> None: ...
+    def upsert(self, items: list[GalleryItem]) -> int: ...
+    def search(self, embedding: np.ndarray, top_k: int) -> list[Match]: ...
+    def delete(self, image_id: str) -> bool: ...
+    def count(self) -> int: ...
+    def list_vehicles(self, limit: int = 100) -> list[dict]: ...
+    def close(self) -> None: ...
+
+
+def _normalise(vector: np.ndarray) -> np.ndarray:
+    vector = np.asarray(vector, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-12:
+        raise ValueError("Нулевой эмбеддинг: сравнивать такой вектор бессмысленно")
+    return vector / norm
+
+
+class PgVectorRepository:
+    """PostgreSQL + pgvector. Основное хранилище для поставки.
+
+    Поиск идёт по оператору `<=>` (косинусное расстояние). Поскольку все векторы
+    хранятся нормированными, косинусное сходство равно 1 - расстояние.
+    """
+
+    def __init__(self, dsn: str, table: str = "gallery"):
+        import psycopg
+        from pgvector.psycopg import register_vector
+
+        self._psycopg = psycopg
+        self._register_vector = register_vector
+        self.table = table
+        self.connection = psycopg.connect(dsn, autocommit=True)
+        self.connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        register_vector(self.connection)
+        self._lock = threading.Lock()
+
+    def initialise(self, dimension: int) -> None:
+        with self._lock:
+            self.connection.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.table} (
+                    image_id   TEXT PRIMARY KEY,
+                    vehicle_id TEXT,
+                    embedding  vector({dimension}) NOT NULL,
+                    metadata   JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            # HNSW: приближённый поиск, который держит скорость на больших
+            # галереях. Раздел 10 ТЗ отдельно просит это продемонстрировать.
+            self.connection.execute(f"""
+                CREATE INDEX IF NOT EXISTS {self.table}_embedding_hnsw
+                ON {self.table} USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """)
+            self.connection.execute(
+                f"CREATE INDEX IF NOT EXISTS {self.table}_vehicle_id ON {self.table} (vehicle_id)")
+
+    def upsert(self, items: list[GalleryItem]) -> int:
+        if not items:
+            return 0
+        rows = [(i.image_id, i.vehicle_id, _normalise(i.embedding), json.dumps(i.metadata))
+                for i in items]
+        with self._lock, self.connection.cursor() as cursor:
+            cursor.executemany(
+                f"""INSERT INTO {self.table} (image_id, vehicle_id, embedding, metadata)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (image_id) DO UPDATE
+                    SET vehicle_id = EXCLUDED.vehicle_id,
+                        embedding  = EXCLUDED.embedding,
+                        metadata   = EXCLUDED.metadata""",
+                rows,
+            )
+        return len(rows)
+
+    def search(self, embedding: np.ndarray, top_k: int) -> list[Match]:
+        vector = _normalise(embedding)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT image_id, vehicle_id, 1 - (embedding <=> %s) AS score, metadata
+                    FROM {self.table} ORDER BY embedding <=> %s LIMIT %s""",
+                (vector, vector, top_k),
+            )
+            return [Match(r[0], r[1], float(r[2]), r[3] or {}) for r in cursor.fetchall()]
+
+    def delete(self, image_id: str) -> bool:
+        with self._lock, self.connection.cursor() as cursor:
+            cursor.execute(f"DELETE FROM {self.table} WHERE image_id = %s", (image_id,))
+            return cursor.rowcount > 0
+
+    def count(self) -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute(f"SELECT count(*) FROM {self.table}")
+            return int(cursor.fetchone()[0])
+
+    def list_vehicles(self, limit: int = 100) -> list[dict]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT vehicle_id, count(*) AS shots, max(created_at) AS last_seen
+                    FROM {self.table} WHERE vehicle_id IS NOT NULL
+                    GROUP BY vehicle_id ORDER BY last_seen DESC LIMIT %s""",
+                (limit,),
+            )
+            return [{"vehicle_id": r[0], "shots": int(r[1]), "last_seen": r[2].isoformat()}
+                    for r in cursor.fetchall()]
+
+    def close(self) -> None:
+        self.connection.close()
+
+
+class SQLiteRepository:
+    """Локальная реализация для разработки и тестов, без внешних сервисов.
+
+    Точный перебор по всей галерее. Для конкурсных объёмов (750 объектов) это
+    доли миллисекунды, для продакшена используется pgvector с HNSW.
+    """
+
+    def __init__(self, path: Path | str = ":memory:"):
+        self.path = str(path)
+        if self.path != ":memory:":
+            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self._lock = threading.Lock()
+        self._dimension: int | None = None
+
+    def initialise(self, dimension: int) -> None:
+        self._dimension = dimension
+        with self._lock:
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS gallery (
+                    image_id   TEXT PRIMARY KEY,
+                    vehicle_id TEXT,
+                    embedding  BLOB NOT NULL,
+                    metadata   TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                )
+            """)
+            self.connection.commit()
+
+    def upsert(self, items: list[GalleryItem]) -> int:
+        import time
+        rows = [(i.image_id, i.vehicle_id, _normalise(i.embedding).tobytes(),
+                 json.dumps(i.metadata), time.time()) for i in items]
+        with self._lock:
+            self.connection.executemany(
+                """INSERT INTO gallery (image_id, vehicle_id, embedding, metadata, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(image_id) DO UPDATE SET
+                     vehicle_id=excluded.vehicle_id, embedding=excluded.embedding,
+                     metadata=excluded.metadata, created_at=excluded.created_at""",
+                rows,
+            )
+            self.connection.commit()
+        return len(rows)
+
+    def search(self, embedding: np.ndarray, top_k: int) -> list[Match]:
+        vector = _normalise(embedding)
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT image_id, vehicle_id, embedding, metadata FROM gallery").fetchall()
+        if not rows:
+            return []
+        matrix = np.stack([np.frombuffer(r[2], dtype=np.float32) for r in rows])
+        scores = matrix @ vector
+        order = np.argsort(-scores, kind="stable")[:top_k]
+        return [Match(rows[i][0], rows[i][1], float(scores[i]), json.loads(rows[i][3]))
+                for i in order]
+
+    def delete(self, image_id: str) -> bool:
+        with self._lock:
+            cursor = self.connection.execute("DELETE FROM gallery WHERE image_id = ?", (image_id,))
+            self.connection.commit()
+            return cursor.rowcount > 0
+
+    def count(self) -> int:
+        with self._lock:
+            return int(self.connection.execute("SELECT count(*) FROM gallery").fetchone()[0])
+
+    def list_vehicles(self, limit: int = 100) -> list[dict]:
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT vehicle_id, count(*), max(created_at) FROM gallery
+                   WHERE vehicle_id IS NOT NULL GROUP BY vehicle_id
+                   ORDER BY max(created_at) DESC LIMIT ?""", (limit,)).fetchall()
+        return [{"vehicle_id": r[0], "shots": int(r[1]), "last_seen": r[2]} for r in rows]
+
+    def close(self) -> None:
+        self.connection.close()
+
+
+def build_repository(dsn: str | None, sqlite_path: Path | str | None = None) -> VectorRepository:
+    """Выбирает хранилище: Postgres при заданном DSN, иначе локальный SQLite."""
+    if dsn:
+        return PgVectorRepository(dsn)
+    return SQLiteRepository(sqlite_path or ":memory:")

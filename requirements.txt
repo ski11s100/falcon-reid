@@ -1,0 +1,22 @@
+# Версии зафиксированы точно, без диапазонов: раздел 7 ТЗ требует
+# воспроизводимости, ответ 39 организаторов — точной фиксации (torch==2.3.1,
+# а не torch>=2.0). Сборка образа может ходить в сеть, запуск — нет.
+#
+# torch и torchvision ставятся отдельной командой в Dockerfile, потому что
+# требуют индекса сборок с CUDA:
+#   pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cu126
+
+numpy==2.5.2
+pillow==12.3.0
+
+# HTTP-сервис и OpenAPI
+fastapi==0.115.6
+starlette==0.41.3
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+
+# PostgreSQL + pgvector
+psycopg[binary]==3.2.3
+pgvector==0.3.6

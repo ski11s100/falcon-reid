@@ -1,0 +1,45 @@
+{
+  "classical": {
+    "mAP": 0.02569678225406724,
+    "Rank-1": 0.023871302542812663,
+    "Rank-5": 0.048261546445251685,
+    "mINP": 0.01262115954238978,
+    "eligible_queries": 1927,
+    "excluded_queries": 0,
+    "protocol": "cross-camera",
+    "elapsed_seconds": 35.26940800000011
+  },
+  "imagenet_resnet18": {
+    "mAP": 0.05990569124524302,
+    "Rank-1": 0.07317073170731707,
+    "Rank-5": 0.13648157758173327,
+    "mINP": 0.02303788066789104,
+    "eligible_queries": 1927,
+    "excluded_queries": 0,
+    "protocol": "cross-camera",
+    "elapsed_seconds": 89.12416459999804
+  },
+  "pilot": {
+    "mAP": 0.03729159575915343,
+    "Rank-1": 0.03788271925272444,
+    "Rank-5": 0.07368967306694343,
+    "mINP": 0.02125868433267547,
+    "eligible_queries": 1927,
+    "excluded_queries": 0,
+    "protocol": "cross-camera",
+    "elapsed_seconds": 89.62894909999886
+  },
+  "metric_learning": {
+    "round": 2,
+    "loss": 0.3075552348792553,
+    "mAP": 0.08127722851828531,
+    "Rank-1": 0.08666320705760248,
+    "Rank-5": 0.17488323819408408,
+    "mINP": 0.038283552517137276,
+    "eligible_queries": 1927,
+    "excluded_queries": 0,
+    "protocol": "cross-camera"
+  },
+  "checkpoint_sha256": "1f551aa2d81e9aaf493c320b80c9fd7f10bcb821d0f15609648fa84fbff53047",
+  "status": "experimental; low quality; threshold uncalibrated; not competition-ready"
+}
