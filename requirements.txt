@@ -17,6 +17,9 @@ pydantic==2.10.4
 pydantic-settings==2.7.0
 python-multipart==0.0.20
 
+# Приближённый поиск для демонстрации масштабируемости (docs/SCALABILITY.md)
+faiss-cpu==1.15.1
+
 # PostgreSQL + pgvector
 psycopg[binary]==3.2.3
 pgvector==0.3.6

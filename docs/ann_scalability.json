@@ -1,0 +1,89 @@
+[
+  {
+    "gallery_size": 10000,
+    "embedding_dim": 256,
+    "vectors_memory_mb": 10.2,
+    "exact": {
+      "latency_ms_median": 0.071,
+      "recall@10": 1.0
+    },
+    "hnsw": {
+      "build_seconds": 0.1,
+      "m": 32,
+      "ef_construction": 64,
+      "efSearch=32": {
+        "latency_ms_median": 0.0595,
+        "latency_ms_p95": 0.0859,
+        "recall@10": 0.9995
+      },
+      "efSearch=64": {
+        "latency_ms_median": 0.1238,
+        "latency_ms_p95": 0.1504,
+        "recall@10": 0.9995
+      },
+      "efSearch=128": {
+        "latency_ms_median": 0.2104,
+        "latency_ms_p95": 0.2557,
+        "recall@10": 1.0
+      }
+    }
+  },
+  {
+    "gallery_size": 100000,
+    "embedding_dim": 256,
+    "vectors_memory_mb": 102.4,
+    "exact": {
+      "latency_ms_median": 0.8514,
+      "recall@10": 1.0
+    },
+    "hnsw": {
+      "build_seconds": 5.7,
+      "m": 32,
+      "ef_construction": 64,
+      "efSearch=32": {
+        "latency_ms_median": 0.1402,
+        "latency_ms_p95": 0.1865,
+        "recall@10": 0.996
+      },
+      "efSearch=64": {
+        "latency_ms_median": 0.2478,
+        "latency_ms_p95": 0.3028,
+        "recall@10": 0.9965
+      },
+      "efSearch=128": {
+        "latency_ms_median": 0.4828,
+        "latency_ms_p95": 0.5465,
+        "recall@10": 0.9975
+      }
+    }
+  },
+  {
+    "gallery_size": 1000000,
+    "embedding_dim": 256,
+    "vectors_memory_mb": 1024.0,
+    "exact": {
+      "latency_ms_median": 5.6214,
+      "recall@10": 1.0
+    },
+    "hnsw": {
+      "build_seconds": 128.5,
+      "m": 32,
+      "ef_construction": 64,
+      "efSearch=32": {
+        "latency_ms_median": 0.2383,
+        "latency_ms_p95": 0.3787,
+        "recall@10": 0.7995
+      },
+      "efSearch=64": {
+        "latency_ms_median": 0.4077,
+        "latency_ms_p95": 0.6264,
+        "recall@10": 0.889
+      },
+      "efSearch=128": {
+        "latency_ms_median": 0.7461,
+        "latency_ms_p95": 1.033,
+        "recall@10": 0.95
+      }
+    }
+  }
+]
