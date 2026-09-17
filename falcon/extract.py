@@ -115,7 +115,16 @@ class FeatureExtractor:
             self.model, self.metadata = load_checkpoint(checkpoint)
 
         self.model.eval().to(self.device)
-        if self.config.channels_last:
+
+        # Раскладка памяти меняется ТОЛЬКО у собственной модели. nn.Module.to()
+        # перекладывает параметры на месте, поэтому для заимствованной модели это
+        # тихо портит обучение: после валидации веса остаются в channels_last,
+        # обучение продолжает подавать NCHW, и cuDNN перекладывает память на
+        # каждой свёртке. Эпоха после валидации дорожала с 55 до 400 секунд при
+        # полной загрузке GPU — снаружи выглядело как нехватка памяти, хотя
+        # видеокарта просто перетасовывала байты.
+        self._channels_last = self.config.channels_last and self._owns_model
+        if self._channels_last:
             self.model = self.model.to(memory_format=torch.channels_last)
 
         # Рабочий путь идёт по заранее сконвертированным half-весам: это быстрее
@@ -144,7 +153,7 @@ class FeatureExtractor:
 
     def _forward(self, batch: torch.Tensor) -> torch.Tensor:
         batch = batch.to(self.device, non_blocking=True)
-        if self.config.channels_last:
+        if self._channels_last:
             batch = batch.contiguous(memory_format=torch.channels_last)
 
         if self._pre_cast:
@@ -163,7 +172,7 @@ class FeatureExtractor:
                 # заодно лучше загружает GPU при batch=1.
                 flipped = torch.flip(batch, dims=[3])
                 merged = torch.cat([batch, flipped], dim=0)
-                if self.config.channels_last:
+                if self._channels_last:
                     merged = merged.contiguous(memory_format=torch.channels_last)
                 both = self.model(merged)
                 features = both[: len(batch)] + both[len(batch):]

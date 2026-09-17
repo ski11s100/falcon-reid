@@ -370,6 +370,9 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--eval-every", type=int, default=2,
+                        help="Валидировать каждые N эпох")
+    parser.add_argument("--no-checkpointing", action="store_true")
     args = parser.parse_args()
 
     config = TrainConfig(
@@ -380,6 +383,8 @@ def main() -> None:
         num_workers=args.workers,
         amp=not args.no_amp,
         seed=args.seed,
+        eval_every=args.eval_every,
+        grad_checkpointing=not args.no_checkpointing,
     )
     result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
                    csv_path=args.csv, images_dir=args.images)
