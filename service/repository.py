@@ -84,7 +84,32 @@ class PgVectorRepository:
         register_vector(self.connection)
         self._lock = threading.Lock()
 
+    def _existing_dimension(self) -> int | None:
+        """Размерность вектора в уже существующей таблице, если она есть."""
+        row = self.connection.execute(
+            """SELECT a.atttypmod FROM pg_attribute a
+               JOIN pg_class c ON c.oid = a.attrelid
+               WHERE c.relname = %s AND a.attname = 'embedding' AND a.attnum > 0""",
+            (self.table,),
+        ).fetchone()
+        return int(row[0]) if row and row[0] and row[0] > 0 else None
+
     def initialise(self, dimension: int) -> None:
+        # Размерность зашита в тип колонки, и CREATE TABLE IF NOT EXISTS тихо
+        # пропустит создание при несовпадении. Дальше любая запись падала бы с
+        # невнятной ошибкой 500. Такое бывает при смене модели или переходе на
+        # ансамбль: 2048 превращается в 4096.
+        existing = self._existing_dimension()
+        if existing is not None and existing != dimension:
+            raise RuntimeError(
+                f"В базе лежит таблица {self.table} с вектором {existing} измерений, "
+                f"а модель выдаёт {dimension}. Схема несовместима.\n"
+                f"Если данные галереи не нужны, удалите таблицу:\n"
+                f"    docker compose exec postgres "
+                f"psql -U falcon -d falcon -c 'DROP TABLE {self.table}'\n"
+                f"Либо поднимите базу заново: docker compose down -v"
+            )
+
         with self._lock:
             self.connection.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.table} (

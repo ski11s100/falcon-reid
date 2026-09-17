@@ -35,14 +35,15 @@ services:
         condition: service_healthy
     environment:
       FALCON_DATABASE_DSN: postgresql://falcon:falcon@postgres:5432/falcon
-      FALCON_CHECKPOINT: /opt/falcon/models/model-b.pt
+      # Тот же ансамбль, что идёт в сдачу: порог откалиброван под этот состав
+      # моделей и на одиночную модель не переносится.
+      FALCON_CHECKPOINTS: /opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt
       FALCON_DEVICE: cuda
       FALCON_HOST: "0.0.0.0"
       FALCON_PORT: "8000"
-      # Порог отказа задаётся только после калибровки на валидации.
-      # Пустое значение означает «не откалиброван»: сервис показывает
-      # кандидатов, но не подтверждает совпадение. Это осознанное поведение.
-      # FALCON_MATCH_THRESHOLD: "0.??"
+      # Порог отказа, откалиброванный на локальном сплите под этот ансамбль
+      # (runs/v5-final/calibration.json). Максимизирует 0.7*F1 + 0.3*TNR.
+      FALCON_MATCH_THRESHOLD: "0.411"
     # Разделяемая память для загрузчика данных. Решение умеет работать и при
     # 64 МБ по умолчанию (falcon/extract.py переключает обмен на файловую
     # систему), но с нормальным объёмом оно чуть быстрее.

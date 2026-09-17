@@ -11,7 +11,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FALCON_", env_file=".env", extra="ignore")
 
-    # Модель
+    # Модель. Список путей через запятую — тогда поднимается ансамбль, тот же,
+    # что идёт в сдачу. Это важно для порога: он калибруется под конкретный
+    # состав моделей и между ними не переносится.
+    checkpoints: str | None = None
     checkpoint: Path | None = None
     device: str = "cuda"
     batch_size: int = 32
@@ -39,6 +42,13 @@ class Settings(BaseSettings):
     @property
     def size(self) -> tuple[int, int]:
         return (self.input_size, self.input_size)
+
+    @property
+    def checkpoint_paths(self) -> list[Path]:
+        """Веса для загрузки: список из FALCON_CHECKPOINTS либо один checkpoint."""
+        if self.checkpoints:
+            return [Path(p.strip()) for p in self.checkpoints.split(",") if p.strip()]
+        return [self.checkpoint] if self.checkpoint else []
 
 
 @lru_cache(maxsize=1)

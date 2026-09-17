@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
 from falcon.explain import GradCAM, overlay_heatmap, plate_attention
-from falcon.extract import ExtractorConfig, FeatureExtractor
+from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
 from falcon.model import VehicleReID
 
 from .config import Settings, get_settings
@@ -74,14 +74,17 @@ state = ServiceState()
 async def lifespan(app: FastAPI):
     settings = get_settings()
 
-    if settings.checkpoint and Path(settings.checkpoint).is_file():
-        state.extractor = FeatureExtractor(
-            checkpoint=settings.checkpoint,
-            config=ExtractorConfig(size=settings.size, batch_size=settings.batch_size,
-                                   num_workers=0, device=settings.device,
-                                   half=settings.half, flip_tta=settings.flip_tta),
+    paths = [p for p in settings.checkpoint_paths if p.is_file()]
+    if paths:
+        state.extractor = build_extractor(
+            paths,
+            ExtractorConfig(size=settings.size, batch_size=settings.batch_size,
+                            num_workers=0, device=settings.device,
+                            half=settings.half, flip_tta=settings.flip_tta),
         )
-        state.model_name = f"{VehicleReID.ARCHITECTURE} ({Path(settings.checkpoint).name})"
+        names = " + ".join(p.name for p in paths)
+        state.model_name = (f"{VehicleReID.ARCHITECTURE} "
+                            f"({'ансамбль: ' if len(paths) > 1 else ''}{names})")
     else:
         # Без обученного чекпоинта сервис поднимается, но честно сообщает об этом
         # в /api/health. Молча отдавать случайные эмбеддинги было бы хуже.
