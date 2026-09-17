@@ -74,6 +74,24 @@
       <button class="button button--ghost" id="btn-register" disabled>В галерею</button>
     </div>
 
+    <div class="panel__head panel__head--sub">
+      <span class="panel__num">1Б</span>
+      <h2 class="panel__title">Наполнить галерею пачкой</h2>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="batch">Несколько снимков сразу</label>
+      <input type="file" id="batch" accept="image/jpeg,image/png" multiple>
+      <p class="hint">Выделите любое количество файлов. Идентификатор ТС берётся из
+        имени файла до первого подчёркивания: <code>ТС-881_камера-10.jpg</code> даёт
+        <code>ТС-881</code>. Поштучная загрузка для наполнения базы непрактична.</p>
+    </div>
+
+    <div class="actions">
+      <button class="button button--ghost" id="btn-batch" disabled>Загрузить пачкой</button>
+    </div>
+    <div id="batch-status"></div>
+
     <div class="preview" id="preview">
       <p class="preview__empty">Кадр не загружен</p>
     </div>

@@ -69,6 +69,11 @@ class Candidate(BaseModel):
     vehicle_id: str | None
     score: float = Field(description="Косинусное сходство, не калиброванная вероятность")
     metadata: dict = Field(default_factory=dict)
+    thumbnail: str | None = Field(
+        default=None,
+        description="Миниатюра кропа в Data URL. Оператор сверяет машины глазами, "
+                    "по одному идентификатору решение принять невозможно",
+    )
 
 
 class SearchResponse(BaseModel):
@@ -119,6 +124,25 @@ class ExplainResponse(BaseModel):
     similarity: float
     overlay_png_base64: str = Field(description="Кроп с наложенной картой важности")
     plate_region: PlateAttention | None = None
+    elapsed_ms: float
+
+
+class BatchRegisterRequest(BaseModel):
+    """Пакетная регистрация: демонстрация на десятках снимков за один вызов.
+
+    Загружать снимки по одному через интерфейс непрактично даже для показа:
+    наполнение галереи из двадцати кадров занимает минуты ручных действий.
+    Основная проверка организаторами идёт не через сервис, а пакетной командой
+    (ответ 40), но демонстрация тоже должна быть выполнима за разумное время.
+    """
+
+    items: list[RegisterRequest] = Field(min_length=1, max_length=200)
+
+
+class BatchRegisterResponse(BaseModel):
+    registered: int
+    failed: list[dict] = Field(default_factory=list)
+    gallery_size: int
     elapsed_ms: float
 
 

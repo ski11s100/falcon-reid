@@ -158,6 +158,98 @@ $("btn-register").addEventListener("click", async () => {
   }
 });
 
+/* ---------- Пакетная загрузка ---------- */
+
+const batchState = { files: [] };
+
+$("batch").addEventListener("change", (event) => {
+  batchState.files = Array.from(event.target.files || []);
+  $("btn-batch").disabled = batchState.files.length === 0;
+  $("btn-batch").textContent = batchState.files.length
+    ? `Загрузить пачкой (${batchState.files.length})`
+    : "Загрузить пачкой";
+});
+
+function vehicleFromName(name) {
+  // ТС-881_камера-10.jpg -> ТС-881. Так названы файлы, выгруженные из датасета,
+  // и это избавляет от ручного ввода идентификатора для каждого снимка.
+  const base = name.replace(/\.[^.]+$/, "");
+  const cut = base.indexOf("_");
+  return cut > 0 ? base.slice(0, cut) : base;
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`не читается: ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderBatchProgress(done, total, message, errors = []) {
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  $("batch-status").innerHTML = `
+    <div class="batch-progress">
+      <div class="batch-progress__text">${escapeHtml(message)}</div>
+      <div class="batch-progress__bar">
+        <div class="batch-progress__fill" style="width:${percent}%"></div>
+      </div>
+      <div class="batch-progress__text">${done} из ${total}</div>
+      ${errors.length ? `<ul class="batch-progress__list">${errors
+        .slice(0, 5)
+        .map((e) => `<li>${escapeHtml(e)}</li>`)
+        .join("")}</ul>` : ""}
+    </div>`;
+}
+
+$("btn-batch").addEventListener("click", async () => {
+  const files = batchState.files;
+  if (!files.length) return;
+
+  $("btn-batch").disabled = true;
+  const errors = [];
+  let registered = 0;
+
+  // Порциями по 20: один запрос на 200 снимков упёрся бы в лимит размера тела,
+  // а по одному — снова превратился бы в минуты ожидания.
+  const CHUNK = 20;
+  for (let start = 0; start < files.length; start += CHUNK) {
+    const chunk = files.slice(start, start + CHUNK);
+    renderBatchProgress(registered, files.length, "Читаю и отправляю снимки…", errors);
+
+    const items = [];
+    for (const file of chunk) {
+      try {
+        items.push({
+          image_id: file.name,
+          vehicle_id: vehicleFromName(file.name),
+          image_base64: await readAsDataUrl(file),
+        });
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+    if (!items.length) continue;
+
+    try {
+      const result = await call("/api/gallery/register-batch", { items });
+      registered += result.registered;
+      (result.failed || []).forEach((f) => errors.push(`${f.image_id}: ${f.error}`));
+      renderBatchProgress(registered, files.length,
+        `Загружено ${registered}, в галерее ${result.gallery_size}`, errors);
+    } catch (error) {
+      errors.push(error.message);
+      renderBatchProgress(registered, files.length, "Ошибка отправки", errors);
+    }
+  }
+
+  renderBatchProgress(registered, files.length,
+    errors.length ? `Готово с замечаниями: ${errors.length}` : "Готово", errors);
+  $("btn-batch").disabled = false;
+  refreshStatus();
+});
+
 function setBusy(busy, label, id = "btn-search") {
   const button = $(id);
   button.disabled = busy;
@@ -179,11 +271,18 @@ function renderSearch(data) {
   const candidates = data.candidates.map((candidate, index) => {
     const over = threshold !== null && candidate.score >= threshold;
     const width = Math.max(0, Math.min(100, candidate.score * 100));
+    // Картинка — главное в строке кандидата: решение оператор принимает
+    // глазами, а идентификатор нужен лишь чтобы сослаться на запись.
+    const thumb = candidate.thumbnail
+      ? `<img class="candidate__thumb" src="${candidate.thumbnail}" alt="кандидат ${index + 1}">`
+      : `<span class="candidate__thumb candidate__thumb--missing">нет<br>снимка</span>`;
     return `
       <li class="candidate ${over ? "candidate--over" : ""}">
         <span class="candidate__rank">${index + 1}</span>
-        <span class="candidate__id">${escapeHtml(candidate.image_id)}
-          <span class="candidate__vehicle">${escapeHtml(candidate.vehicle_id || "ТС не размечено")}</span>
+        ${thumb}
+        <span class="candidate__id">
+          <span class="candidate__vehicle">${escapeHtml(candidate.vehicle_id || "не размечено")}</span>
+          ${escapeHtml(candidate.image_id)}
         </span>
         <span class="candidate__score">${candidate.score.toFixed(4)}</span>
         <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>

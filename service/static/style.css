@@ -437,3 +437,102 @@ input:focus { outline: 3px solid var(--red); outline-offset: 1px; }
   .panel { border-right: none; border-bottom: var(--rule); }
   .header::after { display: none; }
 }
+
+
+/* ---------- Миниатюры кандидатов ---------- */
+
+/* Оператор принимает решение глазами. Список из одних идентификаторов вида
+ * 3d7fd47923ac45d39fb159ecbec21e75 для этого непригоден: сверять машины нужно
+ * по картинке, а идентификатор нужен только чтобы сослаться на запись. */
+
+.candidate {
+  grid-template-columns: 34px 84px minmax(0, 1fr) auto;
+}
+
+.candidate__thumb {
+  width: 84px;
+  height: 63px;
+  object-fit: cover;
+  border: 2px solid var(--ink);
+  background: var(--paper-dim);
+  display: block;
+}
+
+.candidate__thumb--missing {
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--steel);
+  text-align: center;
+}
+
+.candidate .bar { grid-column: 3 / -1; }
+
+.candidate__id {
+  font-size: 11px;
+  color: var(--steel);
+}
+
+.candidate__vehicle {
+  display: block;
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.candidate--over .candidate__vehicle { color: var(--red-deep); }
+
+/* ---------- Пакетная загрузка ---------- */
+
+.panel__head--sub {
+  margin-top: 30px;
+  border-bottom-width: 2px;
+}
+
+.batch-progress {
+  margin-top: 12px;
+  border: var(--rule);
+  background: #fff;
+  padding: 12px 14px;
+}
+
+.batch-progress__bar {
+  height: 8px;
+  background: var(--paper-dim);
+  margin: 8px 0;
+}
+
+.batch-progress__fill {
+  height: 100%;
+  background: var(--red);
+  transition: width 0.2s ease;
+}
+
+.batch-progress__text {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.batch-progress__list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--steel);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--paper-dim);
+  padding: 1px 4px;
+}
+
+@media (max-width: 560px) {
+  .candidate { grid-template-columns: 28px 60px minmax(0, 1fr) auto; }
+  .candidate__thumb { width: 60px; height: 45px; }
+}

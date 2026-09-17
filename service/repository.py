@@ -25,12 +25,19 @@ import numpy as np
 
 @dataclass(frozen=True)
 class GalleryItem:
-    """Запись галереи: наблюдение ТС с его эмбеддингом и метаданными."""
+    """Запись галереи: наблюдение ТС с его эмбеддингом и метаданными.
+
+    thumbnail — небольшой JPEG кропа. Оператор сверяет машины глазами, и список
+    из одних идентификаторов вида 3d7fd47923ac45d39fb159ecbec21e75 для принятия
+    решения бесполезен. Раздел 10 ТЗ прямо говорит о продуктовой зрелости
+    интерфейса.
+    """
 
     image_id: str
     vehicle_id: str | None
     embedding: np.ndarray
     metadata: dict
+    thumbnail: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,7 @@ class Match:
     vehicle_id: str | None
     score: float
     metadata: dict
+    thumbnail: bytes | None = None
 
 
 class VectorRepository(Protocol):
@@ -117,9 +125,14 @@ class PgVectorRepository:
                     vehicle_id TEXT,
                     embedding  vector({dimension}) NOT NULL,
                     metadata   JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    thumbnail  BYTEA,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            # Таблица могла быть создана прежней версией без миниатюр:
+            # CREATE TABLE IF NOT EXISTS новую колонку не добавляет.
+            self.connection.execute(
+                f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS thumbnail BYTEA")
             self.connection.execute(
                 f"CREATE INDEX IF NOT EXISTS {self.table}_vehicle_id ON {self.table} (vehicle_id)")
 
@@ -164,16 +177,18 @@ class PgVectorRepository:
     def upsert(self, items: list[GalleryItem]) -> int:
         if not items:
             return 0
-        rows = [(i.image_id, i.vehicle_id, _normalise(i.embedding), json.dumps(i.metadata))
-                for i in items]
+        rows = [(i.image_id, i.vehicle_id, _normalise(i.embedding), json.dumps(i.metadata),
+                 i.thumbnail) for i in items]
         with self._lock, self.connection.cursor() as cursor:
             cursor.executemany(
-                f"""INSERT INTO {self.table} (image_id, vehicle_id, embedding, metadata)
-                    VALUES (%s, %s, %s, %s)
+                f"""INSERT INTO {self.table}
+                        (image_id, vehicle_id, embedding, metadata, thumbnail)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (image_id) DO UPDATE
                     SET vehicle_id = EXCLUDED.vehicle_id,
                         embedding  = EXCLUDED.embedding,
-                        metadata   = EXCLUDED.metadata""",
+                        metadata   = EXCLUDED.metadata,
+                        thumbnail  = EXCLUDED.thumbnail""",
                 rows,
             )
         return len(rows)
@@ -182,11 +197,14 @@ class PgVectorRepository:
         vector = _normalise(embedding)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                f"""SELECT image_id, vehicle_id, 1 - (embedding <=> %s) AS score, metadata
+                f"""SELECT image_id, vehicle_id, 1 - (embedding <=> %s) AS score,
+                           metadata, thumbnail
                     FROM {self.table} ORDER BY embedding <=> %s LIMIT %s""",
                 (vector, vector, top_k),
             )
-            return [Match(r[0], r[1], float(r[2]), r[3] or {}) for r in cursor.fetchall()]
+            return [Match(r[0], r[1], float(r[2]), r[3] or {},
+                          bytes(r[4]) if r[4] is not None else None)
+                    for r in cursor.fetchall()]
 
     def embedding_of(self, image_id: str) -> np.ndarray | None:
         with self.connection.cursor() as cursor:
@@ -245,22 +263,29 @@ class SQLiteRepository:
                     vehicle_id TEXT,
                     embedding  BLOB NOT NULL,
                     metadata   TEXT NOT NULL DEFAULT '{}',
+                    thumbnail  BLOB,
                     created_at REAL NOT NULL
                 )
             """)
+            columns = {row[1] for row in
+                       self.connection.execute("PRAGMA table_info(gallery)").fetchall()}
+            if "thumbnail" not in columns:
+                self.connection.execute("ALTER TABLE gallery ADD COLUMN thumbnail BLOB")
             self.connection.commit()
 
     def upsert(self, items: list[GalleryItem]) -> int:
         import time
         rows = [(i.image_id, i.vehicle_id, _normalise(i.embedding).tobytes(),
-                 json.dumps(i.metadata), time.time()) for i in items]
+                 json.dumps(i.metadata), i.thumbnail, time.time()) for i in items]
         with self._lock:
             self.connection.executemany(
-                """INSERT INTO gallery (image_id, vehicle_id, embedding, metadata, created_at)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO gallery
+                       (image_id, vehicle_id, embedding, metadata, thumbnail, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(image_id) DO UPDATE SET
                      vehicle_id=excluded.vehicle_id, embedding=excluded.embedding,
-                     metadata=excluded.metadata, created_at=excluded.created_at""",
+                     metadata=excluded.metadata, thumbnail=excluded.thumbnail,
+                     created_at=excluded.created_at""",
                 rows,
             )
             self.connection.commit()
@@ -270,14 +295,15 @@ class SQLiteRepository:
         vector = _normalise(embedding)
         with self._lock:
             rows = self.connection.execute(
-                "SELECT image_id, vehicle_id, embedding, metadata FROM gallery").fetchall()
+                "SELECT image_id, vehicle_id, embedding, metadata, thumbnail "
+                "FROM gallery").fetchall()
         if not rows:
             return []
         matrix = np.stack([np.frombuffer(r[2], dtype=np.float32) for r in rows])
         scores = matrix @ vector
         order = np.argsort(-scores, kind="stable")[:top_k]
-        return [Match(rows[i][0], rows[i][1], float(scores[i]), json.loads(rows[i][3]))
-                for i in order]
+        return [Match(rows[i][0], rows[i][1], float(scores[i]), json.loads(rows[i][3]),
+                      rows[i][4]) for i in order]
 
     def embedding_of(self, image_id: str) -> np.ndarray | None:
         with self._lock:

@@ -31,6 +31,8 @@ from falcon.model import VehicleReID
 from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
 from .schemas import (
+    BatchRegisterRequest,
+    BatchRegisterResponse,
     Candidate,
     ExplainRequest,
     ExplainResponse,
@@ -181,6 +183,30 @@ def embed(extractor: FeatureExtractor, crop: Image.Image) -> np.ndarray:
     return extractor.encode_image(crop)
 
 
+THUMBNAIL_SIZE = (192, 144)
+
+
+def make_thumbnail(crop: Image.Image) -> bytes:
+    """Небольшой JPEG для показа оператору. Около 6 КБ на снимок."""
+    thumbnail = crop.copy()
+    thumbnail.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    thumbnail.save(buffer, format="JPEG", quality=82, optimize=True)
+    return buffer.getvalue()
+
+
+def as_data_url(thumbnail: bytes | None) -> str | None:
+    if not thumbnail:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(thumbnail).decode()
+
+
+def to_candidate(match) -> Candidate:
+    return Candidate(image_id=match.image_id, vehicle_id=match.vehicle_id,
+                     score=round(match.score, 6), metadata=match.metadata,
+                     thumbnail=as_data_url(match.thumbnail))
+
+
 @app.get("/api/health", response_model=HealthResponse, tags=["Служебные"],
          summary="Состояние сервиса")
 def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
@@ -212,6 +238,7 @@ def register(request: RegisterRequest, settings: Settings = Depends(get_settings
         image_id=request.image_id, vehicle_id=request.vehicle_id,
         embedding=embedding,
         metadata={**request.metadata, "crop": [crop.width, crop.height]},
+        thumbnail=make_thumbnail(crop),
     )])
     return RegisterResponse(
         image_id=request.image_id, vehicle_id=request.vehicle_id,
@@ -232,8 +259,7 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
     embedding = embed(extractor, crop)
 
     found = repository.search(embedding, request.top_k)
-    candidates = [Candidate(image_id=m.image_id, vehicle_id=m.vehicle_id,
-                            score=round(m.score, 6), metadata=m.metadata) for m in found]
+    candidates = [to_candidate(m) for m in found]
 
     threshold = request.threshold if request.threshold is not None else settings.match_threshold
     elapsed = round((time.perf_counter() - started) * 1000, 2)
@@ -261,6 +287,46 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
         threshold=threshold,
         matches=[c for c in candidates if c.score >= threshold] if accepted else [],
         candidates=candidates, quality=quality, elapsed_ms=elapsed)
+
+
+@app.post("/api/gallery/register-batch", response_model=BatchRegisterResponse,
+          status_code=201, tags=["Галерея"],
+          summary="Добавить сразу несколько наблюдений")
+def register_batch(request: BatchRegisterRequest,
+                   settings: Settings = Depends(get_settings),
+                   extractor: FeatureExtractor = Depends(require_model),
+                   repository: VectorRepository = Depends(require_repository)) -> BatchRegisterResponse:
+    """Регистрация пачкой: наполнение галереи для демонстрации за один вызов.
+
+    Один снимок с ошибкой не отменяет остальные: его причина попадает в failed,
+    а годные записи сохраняются. Для наполнения демонстрационной галереи это
+    важнее строгой атомарности.
+    """
+    started = time.perf_counter()
+    limit = settings.max_upload_mb * 1024 * 1024
+    batch: list[GalleryItem] = []
+    failed: list[dict] = []
+
+    for entry in request.items:
+        try:
+            image = decode_image(entry.image_base64, limit)
+            crop = crop_to_bbox(image, entry.bbox)
+            batch.append(GalleryItem(
+                image_id=entry.image_id, vehicle_id=entry.vehicle_id,
+                embedding=embed(extractor, crop),
+                metadata={**entry.metadata, "crop": [crop.width, crop.height]},
+                thumbnail=make_thumbnail(crop),
+            ))
+        except HTTPException as exc:
+            failed.append({"image_id": entry.image_id, "error": exc.detail})
+        except Exception as exc:
+            failed.append({"image_id": entry.image_id, "error": str(exc)[:200]})
+
+    registered = repository.upsert(batch) if batch else 0
+    return BatchRegisterResponse(
+        registered=registered, failed=failed, gallery_size=repository.count(),
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
 
 
 @app.post("/api/explain", response_model=ExplainResponse, tags=["Поиск"],
@@ -323,12 +389,28 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+class NoCacheStatic(StaticFiles):
+    """Статика без кеширования браузером.
+
+    Обнаружено при проверке: после обновления интерфейса браузер продолжал
+    отдавать старый app.js из кеша, и новые элементы просто не появлялись.
+    Файлы здесь маленькие (десятки килобайт), и запрет кеша ничего не стоит,
+    зато жюри гарантированно увидит актуальную версию.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", NoCacheStatic(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html",
+                            headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 def run() -> None:
