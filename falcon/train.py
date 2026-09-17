@@ -326,6 +326,22 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             for key, value in parts.items():
                 running[key] = running.get(key, 0.0) + value
 
+            # Пульс для scripts/progress.py: позволяет показывать ход внутри
+            # эпохи, а не только по её завершении. Пишется редко и атомарно
+            # через временный файл, чтобы читатель не поймал половину записи.
+            if step % 10 == 0 or step == len(sampler):
+                heartbeat = {
+                    "epoch": epoch, "epochs_total": config.epochs,
+                    "step": step, "steps_total": len(sampler),
+                    "loss": round(running.get("total", 0.0) / step, 4),
+                    "accuracy": round(running.get("accuracy", 0.0) / step, 4),
+                    "batch": sampler.batch_size,
+                    "updated": time.time(),
+                }
+                temporary = output_dir / "heartbeat.json.tmp"
+                temporary.write_text(json.dumps(heartbeat), encoding="utf-8")
+                temporary.replace(output_dir / "heartbeat.json")
+
         record = {
             "epoch": epoch,
             "lr": round(scheduler.get_last_lr()[0], 7),

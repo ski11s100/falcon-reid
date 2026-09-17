@@ -77,13 +77,16 @@ def step_audit(dataset: Path, output: Path) -> dict:
     return report
 
 
-def step_train(dataset: Path, output: Path, config: TrainConfig, device: str) -> Path:
+def step_train(dataset: Path, output: Path, config: TrainConfig, device: str,
+               resume: Path | None = None) -> Path:
     stage("2. Обучение")
     checkpoint = output / "model" / "best.pt"
     if checkpoint.is_file():
         print(f"Чекпоинт уже есть: {checkpoint}. Обучение пропущено.", flush=True)
         return checkpoint
-    result = train(dataset, output / "model", config, device=device)
+    if resume is not None:
+        print(json.dumps({"resume_from": str(resume)}, ensure_ascii=False), flush=True)
+    result = train(dataset, output / "model", config, device=device, resume=resume)
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     return checkpoint
 
@@ -271,6 +274,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--skip-benchmark", action="store_true")
+    parser.add_argument("--resume", type=Path,
+                        help="Чекпоинт предобучения; классификатор не переносится")
     args = parser.parse_args()
 
     for name in ("train.csv", "test_query.csv", "test_gallery.csv"):
@@ -284,7 +289,8 @@ def main() -> None:
 
     step_audit(args.dataset, args.output)
     config = TrainConfig(epochs=args.epochs, num_workers=args.workers, seed=args.seed)
-    checkpoint = step_train(args.dataset, args.output, config, args.device)
+    checkpoint = step_train(args.dataset, args.output, config, args.device,
+                            resume=args.resume)
 
     split, query, gallery, extractor = local_vectors(
         checkpoint, args.dataset, args.seed, args.device, args.workers)
