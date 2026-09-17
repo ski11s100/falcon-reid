@@ -127,14 +127,28 @@ def build_scheduler(optimizer, config: TrainConfig, steps_per_epoch: int):
 @torch.no_grad()
 def validate(model, gallery: list[Observation], query: list[Observation],
              config: TrainConfig, device: str) -> dict:
-    """Официальная mAP@10 на локальном сплите. Именно по ней выбирается чекпоинт."""
+    """Официальная mAP@10 на локальном сплите. Именно по ней выбирается чекпоинт.
+
+    Модель передаётся по ссылке, и экстрактор её не меняет: ускорение внутри даёт
+    autocast. Валидация обязана быть побочно-чистой, иначе обучение незаметно
+    деградирует от проверки к проверке.
+    """
+    was_training = model.training
     extractor = FeatureExtractor(
         model=model,
-        config=ExtractorConfig(size=config.size, batch_size=64, num_workers=config.num_workers,
+        config=ExtractorConfig(size=config.size, batch_size=48, num_workers=config.num_workers,
                                device=device, half=True, flip_tta=False),
     )
-    gallery_vectors = extractor.extract(gallery, progress=False)
-    query_vectors = extractor.extract(query, progress=False)
+    try:
+        gallery_vectors = extractor.extract(gallery, progress=False)
+        query_vectors = extractor.extract(query, progress=False)
+    finally:
+        del extractor
+        model.train(was_training)
+        # Пики валидации не должны оставаться зарезервированными на следующую
+        # эпоху: на 6 ГБ видеопамяти это приводит к вытеснению в системную.
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
 
     gallery_ids = [row.image_id for row in gallery]
     query_ids = [row.image_id for row in query]
@@ -142,14 +156,41 @@ def validate(model, gallery: list[Observation], query: list[Observation],
 
     query_labels = {row.image_id: Identity(row.vehicle_id, row.camera_id) for row in query}
     gallery_labels = {row.image_id: Identity(row.vehicle_id, row.camera_id) for row in gallery}
-    report = evaluate_ranking(ranking, query_labels, gallery_labels)
-    # Модель могла остаться в half после экстрактора — возвращаем в fp32 для обучения.
-    model.float()
-    return report.as_dict()
+    return evaluate_ranking(ranking, query_labels, gallery_labels).as_dict()
+
+
+def load_transferred_weights(model, checkpoint: Path, verbose: bool = True) -> dict:
+    """Переносит веса предобучения, отбрасывая несовместимые слои.
+
+    Классификатор привязан к числу идентичностей конкретного набора: у VeRi-776
+    их 576, у конкурсного train.csv — 1156. Его веса переносить бессмысленно и
+    технически невозможно, а вот backbone и BNNeck — именно то, ради чего
+    предобучение и делается.
+    """
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = state.get("model", state)
+    current = model.state_dict()
+
+    accepted, rejected = {}, []
+    for key, value in state.items():
+        if key in current and current[key].shape == value.shape:
+            accepted[key] = value
+        else:
+            rejected.append(key)
+
+    model.load_state_dict(accepted, strict=False)
+    report = {"transferred": len(accepted), "skipped": rejected,
+              "source": str(checkpoint)}
+    if verbose:
+        print(json.dumps({"transfer": report}, ensure_ascii=False), flush=True)
+    if not accepted:
+        raise RuntimeError(f"Из {checkpoint} не перенесено ни одного слоя")
+    return report
 
 
 def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
-          device: str = "cuda", resume: Path | None = None) -> dict:
+          device: str = "cuda", resume: Path | None = None,
+          csv_path: Path | None = None, images_dir: Path | None = None) -> dict:
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -159,7 +200,11 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     output_dir.mkdir(parents=True, exist_ok=True)
     config = autoconfigure_batch(config, device)
 
-    rows = read_manifest(dataset_dir / "train.csv", dataset_dir / "images", require_labels=True)
+    # Пути можно задать явно: предобучение идёт на стороннем наборе (VeRi-776),
+    # где раскладка каталогов своя и отличается от конкурсной.
+    manifest = csv_path or (dataset_dir / "train.csv")
+    images = images_dir or (dataset_dir / "images")
+    rows = read_manifest(manifest, images, require_labels=True)
     dataset_audit = audit(rows)
     print(json.dumps({"audit": dataset_audit}, ensure_ascii=False), flush=True)
 
@@ -176,10 +221,12 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     labels = sorted({r.vehicle_id for r in split.train})
     label_index = {name: i for i, name in enumerate(labels)}
 
+    # Без resume backbone инициализируется весами ImageNet+IBN. С resume поверх
+    # них ложится предобучение на стороннем наборе — ImageNet скачивать не нужно.
     model = build_model(num_classes=len(labels), embedding_dim=config.embedding_dim,
                         pretrained=resume is None)
     if resume is not None:
-        model.load_state_dict(torch.load(resume, map_location="cpu")["model"], strict=False)
+        load_transferred_weights(model, resume)
     model.to(device)
 
     criterion = ReIDCriterion(
@@ -281,6 +328,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Обучение ReID-энкодера ФАЛЬКОН")
     parser.add_argument("dataset", type=Path, help="Каталог с train.csv и images/")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--csv", type=Path, help="Манифест вместо <dataset>/train.csv")
+    parser.add_argument("--images", type=Path, help="Каталог кадров вместо <dataset>/images")
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--identities-per-batch", type=int, default=16)
     parser.add_argument("--shots-per-identity", type=int, default=4)
@@ -301,7 +350,8 @@ def main() -> None:
         amp=not args.no_amp,
         seed=args.seed,
     )
-    result = train(args.dataset, args.output, config, device=args.device, resume=args.resume)
+    result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
+                   csv_path=args.csv, images_dir=args.images)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

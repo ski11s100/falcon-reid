@@ -51,6 +51,23 @@ class CropDataset(Dataset):
         return tensor, self.labels[row.vehicle_id], _camera_code(row.camera_id), index
 
 
+def shutdown_loader(loader: DataLoader) -> None:
+    """Принудительно останавливает воркеров загрузчика.
+
+    DataLoader с persistent_workers держит процессы, пока жив сам объект, а сбор
+    мусора в CPython происходит не сразу. На Windows каждый воркер — полноценный
+    процесс с загруженным torch, и накопление десятков таких процессов быстро
+    съедает память.
+    """
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is not None:
+        try:
+            iterator._shutdown_workers()
+        except Exception:
+            pass
+        loader._iterator = None
+
+
 def _camera_code(camera_id: str | None) -> int:
     """Камера как целое: нужна triplet-потере для отбора кросс-камерных пар."""
     if camera_id is None:
@@ -83,6 +100,12 @@ class FeatureExtractor:
             self.config.half = False
         self.device = torch.device(self.config.device)
 
+        # Модель, переданную извне, экстрактор НЕ ВЛАДЕЕТ и потому не имеет права
+        # менять: конвертация в half происходила бы прямо в объекте вызывающего.
+        # При валидации во время обучения это означало round-trip fp32 -> fp16 ->
+        # fp32 на каждой проверке: веса теряли точность, а повторное выделение
+        # всех параметров фрагментировало видеопамять до вытеснения в системную.
+        self._owns_model = model is None
         if model is not None:
             self.model = model
             self.metadata: dict = {"architecture": VehicleReID.ARCHITECTURE, "source": "in-memory"}
@@ -100,13 +123,17 @@ class FeatureExtractor:
         # балла за производительность. Grad-CAM работает с отдельной fp32-копией
         # (см. explain_model): градиенты в half неустойчивы, а конвертировать
         # модель туда-обратно на каждый запрос — это десятки секунд.
+        #
+        # Пре-каст допустим только для собственной модели. Для заимствованной
+        # ускорение даёт autocast: он ничего не меняет в самом объекте.
         self._explain_model: VehicleReID | None = None
-        if self.config.half and self.device.type == "cuda":
+        self._fp32_state: dict | None = None
+        self._pre_cast = self.config.half and self.device.type == "cuda" and self._owns_model
+        self._autocast = self.config.half and self.device.type == "cuda" and not self._owns_model
+        if self._pre_cast:
             self._fp32_state = {k: v.detach().clone()
                                 for k, v in self.model.state_dict().items()}
             self.model = self.model.half()
-        else:
-            self._fp32_state = None
 
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -120,10 +147,10 @@ class FeatureExtractor:
         if self.config.channels_last:
             batch = batch.contiguous(memory_format=torch.channels_last)
 
-        if self.config.half and self.device.type == "cuda":
+        if self._pre_cast:
             batch = batch.half()
 
-        with torch.inference_mode():
+        with torch.inference_mode(), torch.autocast("cuda", torch.float16, enabled=self._autocast):
             if self.config.flip_tta:
                 # Отражение по горизонтали — единственная TTA, разрешённая ответом 38
                 # (на уровне одного изображения).
@@ -157,12 +184,19 @@ class FeatureExtractor:
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         started = time.perf_counter()
         done = 0
-        for batch, indices in loader:
-            output[indices.numpy()] = self._forward(batch).cpu().numpy()
-            done += len(indices)
-            if progress and done % (self.config.batch_size * 20) < self.config.batch_size:
-                rate = done / max(1e-9, time.perf_counter() - started)
-                print(json.dumps({"extracted": done, "total": len(rows), "fps": round(rate, 1)}), flush=True)
+        try:
+            for batch, indices in loader:
+                output[indices.numpy()] = self._forward(batch).cpu().numpy()
+                done += len(indices)
+                if progress and done % (self.config.batch_size * 20) < self.config.batch_size:
+                    rate = done / max(1e-9, time.perf_counter() - started)
+                    print(json.dumps({"extracted": done, "total": len(rows),
+                                      "fps": round(rate, 1)}), flush=True)
+        finally:
+            # persistent_workers держит процессы живыми, пока жив загрузчик.
+            # Во время обучения extract() вызывается на каждой валидации, и без
+            # явного закрытия воркеры накапливаются десятками процессов.
+            shutdown_loader(loader)
         return output
 
     @property
@@ -251,6 +285,7 @@ class FeatureExtractor:
             synchronize()
             elapsed = time.perf_counter() - started
             throughput[batch_size] = processed / elapsed
+            shutdown_loader(loader)
             del loader
 
         peak_vram = (torch.cuda.max_memory_allocated() / 1e6) if self.device.type == "cuda" else 0.0
