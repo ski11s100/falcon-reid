@@ -139,6 +139,27 @@ def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
     return config
 
 
+def write_heartbeat(output_dir: Path, payload: dict) -> None:
+    """Пульс для scripts/progress.py. НИКОГДА не роняет обучение.
+
+    Диагностика не имеет права прерывать работу, за которой наблюдает. Первая
+    версия писала файл через os.replace() без защиты, и на Windows это убило
+    прогон на девятой эпохе: заменить файл, открытый другим процессом на чтение,
+    нельзя — os.replace бросает PermissionError. Читателем был как раз индикатор
+    прогресса, то есть инструмент наблюдения уронил наблюдаемое.
+
+    Здесь любая ошибка записи проглатывается: потеря одного кадра индикатора
+    ничего не стоит, потеря часа обучения стоит дорого.
+    """
+    try:
+        temporary = output_dir / "heartbeat.json.tmp"
+        temporary.write_text(json.dumps(payload), encoding="utf-8")
+        temporary.replace(output_dir / "heartbeat.json")
+    except OSError:
+        # Файл занят читателем, диск переполнен, каталог удалён — не важно.
+        pass
+
+
 def build_scheduler(optimizer, config: TrainConfig, steps_per_epoch: int):
     """Warmup + косинусное затухание, посчитанные в шагах, а не в эпохах."""
     total_steps = config.epochs * steps_per_epoch
@@ -330,17 +351,14 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             # эпохи, а не только по её завершении. Пишется редко и атомарно
             # через временный файл, чтобы читатель не поймал половину записи.
             if step % 10 == 0 or step == len(sampler):
-                heartbeat = {
+                write_heartbeat(output_dir, {
                     "epoch": epoch, "epochs_total": config.epochs,
                     "step": step, "steps_total": len(sampler),
                     "loss": round(running.get("total", 0.0) / step, 4),
                     "accuracy": round(running.get("accuracy", 0.0) / step, 4),
                     "batch": sampler.batch_size,
                     "updated": time.time(),
-                }
-                temporary = output_dir / "heartbeat.json.tmp"
-                temporary.write_text(json.dumps(heartbeat), encoding="utf-8")
-                temporary.replace(output_dir / "heartbeat.json")
+                })
 
         record = {
             "epoch": epoch,
