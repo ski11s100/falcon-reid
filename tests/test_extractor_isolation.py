@@ -109,5 +109,45 @@ class TestOwnedModelIsOptimised(unittest.TestCase):
             self.assertEqual(next(extractor.model.parameters()).dtype, torch.float16)
 
 
+class TestCameraCodeStability(unittest.TestCase):
+    """Код камеры обязан совпадать между процессами.
+
+    Батчи собираются в процессах-воркерах DataLoader. Встроенный hash() для
+    строк рандомизируется на каждый процесс, поэтому одна и та же камера
+    получала бы разные коды у разных воркеров, и маска кросс-камерных пар в
+    triplet-потере превращалась бы в шум — молча, без единой ошибки.
+    """
+
+    def test_numeric_ids_pass_through(self):
+        from falcon.extract import _camera_code
+        self.assertEqual(_camera_code("90"), 90)
+        self.assertEqual(_camera_code("0"), 0)
+
+    def test_missing_id(self):
+        from falcon.extract import _camera_code
+        self.assertEqual(_camera_code(None), -1)
+
+    def test_textual_ids_are_deterministic_across_processes(self):
+        import subprocess
+        code = (
+            "import sys; sys.path.insert(0, r'%s');"
+            "from falcon.extract import _camera_code;"
+            "print(_camera_code('veri-c1'), _camera_code('veri-c17'))"
+            % str(Path(__file__).resolve().parent.parent)
+        )
+        runs = {
+            subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, check=True).stdout.strip()
+            for _ in range(3)
+        }
+        self.assertEqual(len(runs), 1,
+                         f"Код камеры различается между процессами: {runs}")
+
+    def test_different_cameras_get_different_codes(self):
+        from falcon.extract import _camera_code
+        codes = {_camera_code(f"veri-c{i}") for i in range(1, 21)}
+        self.assertEqual(len(codes), 20, "Коды камер столкнулись")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

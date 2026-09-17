@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import zlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,30 +53,36 @@ class CropDataset(Dataset):
 
 
 def shutdown_loader(loader: DataLoader) -> None:
-    """Принудительно останавливает воркеров загрузчика.
+    """Освобождает воркеров разового загрузчика.
 
-    DataLoader с persistent_workers держит процессы, пока жив сам объект, а сбор
-    мусора в CPython происходит не сразу. На Windows каждый воркер — полноценный
-    процесс с загруженным torch, и накопление десятков таких процессов быстро
-    съедает память.
+    Реализация намеренно НЕ трогает приватный `_shutdown_workers()`. Первая
+    версия вызывала его напрямую и на Windows приводила к взаимоблоку: все
+    процессы вставали с нулевым потреблением CPU, прогон замирал на валидации
+    и не завершался часами. Метод приватный, рассчитан на вызов из `__del__`
+    и не обязан быть безопасным в произвольный момент.
+
+    Достаточно снять ссылку на итератор: загрузчики здесь создаются без
+    persistent_workers, поэтому воркеры завершаются штатно по исчерпании.
     """
-    iterator = getattr(loader, "_iterator", None)
-    if iterator is not None:
-        try:
-            iterator._shutdown_workers()
-        except Exception:
-            pass
-        loader._iterator = None
+    loader._iterator = None
 
 
 def _camera_code(camera_id: str | None) -> int:
-    """Камера как целое: нужна triplet-потере для отбора кросс-камерных пар."""
+    """Камера как целое: нужна triplet-потере для отбора кросс-камерных пар.
+
+    Для нечисловых идентификаторов берётся CRC32, а НЕ встроенный hash().
+    Питоновский hash() для строк рандомизируется на каждый процесс, а батчи
+    собираются в процессах-воркерах DataLoader: одна и та же камера получала бы
+    в разных воркерах разные коды. Маска кросс-камерных пар в triplet-потере
+    превращалась бы в шум — молча, без единой ошибки. Конкурсные camera_id
+    числовые и не задеты, а вот у VeRi они вида "veri-c1".
+    """
     if camera_id is None:
         return -1
     try:
         return int(camera_id)
     except ValueError:
-        return abs(hash(camera_id)) % 1_000_000
+        return zlib.crc32(camera_id.encode("utf-8"))
 
 
 @dataclass
@@ -188,7 +195,11 @@ class FeatureExtractor:
             shuffle=False,
             num_workers=self.config.num_workers,
             pin_memory=self.device.type == "cuda",
-            persistent_workers=self.config.num_workers > 0,
+            # persistent_workers здесь НЕ нужен: загрузчик создаётся на один
+            # проход и больше не переиспользуется. Персистентность только держала
+            # бы процессы живыми и требовала ручного закрытия, которое и привело
+            # к взаимоблоку на Windows.
+            persistent_workers=False,
         )
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         started = time.perf_counter()
@@ -271,8 +282,9 @@ class FeatureExtractor:
                 shuffle=False,
                 num_workers=self.config.num_workers,
                 pin_memory=self.device.type == "cuda",
-                # Без persistent_workers каждый повторный проход поднимает
-                # процессы заново; на Windows это секунды на проход.
+                # Здесь персистентность оправдана: загрузчик обходится много раз
+                # подряд в течение замера, и перезапуск процессов на каждом
+                # проходе исказил бы результат.
                 persistent_workers=self.config.num_workers > 0,
                 prefetch_factor=4 if self.config.num_workers > 0 else None,
             )
