@@ -72,13 +72,20 @@ def build_ranking(
         # Индекс соседства галереи строится один раз: галерея статична (ответ 38).
         index = build_gallery_index(gallery, k=max(config.k1 + 10, 30))
         for i, vector in enumerate(queries):
-            order, scores = rerank_query(
+            order, _ = rerank_query(
                 vector, index,
                 k1=config.k1, k2=config.k2, lambda_value=config.lambda_value,
                 candidate_pool=config.rerank_pool,
             )
             top_indices[i] = order[:TOP_K]
-            top_scores[i] = scores[:TOP_K]
+            # Уверенность — ВСЕГДА исходная косинусная близость, даже когда
+            # порядок определён переранжированием. Оценки re-ranking лежат в
+            # другой шкале (смесь расстояний со знаком минус), и порог, найденный
+            # калибровкой на косинусе, к ним неприменим: однажды это отклонило
+            # все 1110 запросов и обнулило режим кандидатов.
+            # Монотонность по уверенности — единственное требование к confidence
+            # (ответ 26), и косинус ему удовлетворяет.
+            top_scores[i] = gallery[top_indices[i]] @ vector
             if progress and i % 200 == 0:
                 print(json.dumps({"reranked": i + 1, "total": len(queries)}), flush=True)
     else:

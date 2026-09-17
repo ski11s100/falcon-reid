@@ -39,11 +39,11 @@ COPY falcon ./falcon
 COPY service ./service
 COPY scripts ./scripts
 
-# Веса модели внутри образа. Суммарный размер весов ограничен 2 ГБ (раздел 7 ТЗ);
-# ResNet50-IBN-a занимает около 107 МБ.
+# Веса внутри образа: две модели ансамбля. Суммарный размер весов ограничен
+# 2 ГБ (раздел 7 ТЗ), две ResNet50-IBN-a занимают 199 МБ.
 COPY models ./models
 
-ENV FALCON_CHECKPOINT=/opt/falcon/models/best.pt \
+ENV FALCON_CHECKPOINT=/opt/falcon/models/model-b.pt \
     FALCON_DEVICE=cuda \
     FALCON_HOST=0.0.0.0 \
     FALCON_PORT=8000 \

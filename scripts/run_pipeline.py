@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from falcon.calibrate import calibrate  # noqa: E402
 from falcon.data import audit, build_local_split, read_manifest  # noqa: E402
-from falcon.extract import ExtractorConfig, FeatureExtractor  # noqa: E402
+from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor  # noqa: E402
 from falcon.metrics import (  # noqa: E402
     Identity,
     evaluate_ranking,
@@ -91,14 +91,14 @@ def step_train(dataset: Path, output: Path, config: TrainConfig, device: str,
     return checkpoint
 
 
-def local_vectors(checkpoint: Path, dataset: Path, seed: int, device: str, workers: int):
+def local_vectors(checkpoints: list[Path], dataset: Path, seed: int, device: str, workers: int):
     """Эмбеддинги локального сплита: нужны и для калибровки, и для A/B re-rank."""
     rows = read_manifest(dataset / "train.csv", dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=seed)
-    extractor = FeatureExtractor(
-        checkpoint=checkpoint,
-        config=ExtractorConfig(batch_size=64, num_workers=workers, device=device,
-                               half=True, flip_tta=True),
+    extractor = build_extractor(
+        checkpoints,
+        ExtractorConfig(batch_size=64, num_workers=workers, device=device,
+                        half=True, flip_tta=True),
     )
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
     query = l2_normalize(extractor.extract(split.query, progress=False))
@@ -166,7 +166,10 @@ def step_rerank_ab(split, query, gallery, output: Path) -> dict:
             ranking = {qids[i]: [gids[j] for j in indices[i]] for i in range(len(qids))}
             value = evaluate_ranking(ranking, ql, gl).mAP
             results[f"k1={k1}, lambda={lam}"] = round(value, 6)
-            if value > best_map:
+            # Порог значимости: прирост меньше 1% относительного — шум одного
+            # сплита, а не реальное улучшение. Переранжирование усложняет
+            # пайплайн и его стоит включать только за ощутимую прибавку.
+            if value > best_map * 1.01:
                 best_map, best_config = value, {"k1": k1, "k2": 6, "lambda": lam}
 
     verdict = {
@@ -175,8 +178,9 @@ def step_rerank_ab(split, query, gallery, output: Path) -> dict:
         "best_mAP": round(best_map, 6),
         "recommended": best_config,
         "enable_rerank": best_config is not None,
-        "note": ("re-ranking включать только при реальном приросте: на малой галерее "
-                 "он систематически ухудшает метрику"),
+        "note": ("re-ranking включается только при приросте больше 1% относительного: "
+                 "на малой галерее он систематически ухудшает метрику, а мелкий "
+                 "плюс неотличим от шума одного сплита"),
     }
     (output / "rerank_ab.json").write_text(
         json.dumps(verdict, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -219,16 +223,16 @@ def step_plate_check(split, extractor, output: Path) -> dict:
     return verdict
 
 
-def step_submit(dataset: Path, checkpoint: Path, output: Path, threshold: float | None,
+def step_submit(dataset: Path, checkpoints: list[Path], output: Path, threshold: float | None,
                 rerank: dict, device: str, workers: int, benchmark: bool) -> dict:
     stage("7. Файлы сдачи")
     queries = read_manifest(dataset / "test_query.csv", dataset / "images")
     gallery = read_manifest(dataset / "test_gallery.csv", dataset / "images")
 
-    extractor = FeatureExtractor(
-        checkpoint=checkpoint,
-        config=ExtractorConfig(batch_size=32, num_workers=workers, device=device,
-                               half=True, flip_tta=True),
+    extractor = build_extractor(
+        checkpoints,
+        ExtractorConfig(batch_size=32, num_workers=workers, device=device,
+                        half=True, flip_tta=True),
     )
     query_vectors = extractor.extract(queries)
     gallery_vectors = extractor.extract(gallery)
@@ -248,7 +252,7 @@ def step_submit(dataset: Path, checkpoint: Path, output: Path, threshold: float 
         shutil.rmtree(submission_dir)
 
     manifest = write_submission(submission_dir, queries, gallery, embeddings, indices,
-                                scores, config, model_version=str(checkpoint.name))
+                                scores, config, model_version=" + ".join(c.name for c in checkpoints))
     report = validate_submission(submission_dir, len(queries), len(gallery))
     print(json.dumps({"manifest": manifest, "validation": report},
                      ensure_ascii=False, indent=2), flush=True)
@@ -274,6 +278,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--skip-benchmark", action="store_true")
+    parser.add_argument("--checkpoints", type=Path, nargs="+",
+                        help="Готовые веса: обучение пропускается. Несколько — ансамбль")
     parser.add_argument("--resume", type=Path,
                         help="Чекпоинт предобучения; классификатор не переносится")
     args = parser.parse_args()
@@ -288,12 +294,21 @@ def main() -> None:
     started = time.perf_counter()
 
     step_audit(args.dataset, args.output)
-    config = TrainConfig(epochs=args.epochs, num_workers=args.workers, seed=args.seed)
-    checkpoint = step_train(args.dataset, args.output, config, args.device,
-                            resume=args.resume)
+    if args.checkpoints:
+        stage("2. Обучение пропущено, используются готовые веса")
+        for path in args.checkpoints:
+            if not path.is_file():
+                parser.error(f"Не найден чекпоинт {path}")
+        print(json.dumps({"checkpoints": [str(c) for c in args.checkpoints],
+                          "ensemble": len(args.checkpoints) > 1}, ensure_ascii=False), flush=True)
+        checkpoints = list(args.checkpoints)
+    else:
+        config = TrainConfig(epochs=args.epochs, num_workers=args.workers, seed=args.seed)
+        checkpoints = [step_train(args.dataset, args.output, config, args.device,
+                                  resume=args.resume)]
 
     split, query, gallery, extractor = local_vectors(
-        checkpoint, args.dataset, args.seed, args.device, args.workers)
+        checkpoints, args.dataset, args.seed, args.device, args.workers)
 
     validation = step_validate(split, query, gallery, args.output)
     calibration = step_calibrate(split, query, gallery, args.output)
@@ -301,7 +316,7 @@ def main() -> None:
     step_plate_check(split, extractor, args.output)
 
     threshold = calibration["selected"]["threshold"]
-    result = step_submit(args.dataset, checkpoint, args.output, threshold, rerank,
+    result = step_submit(args.dataset, checkpoints, args.output, threshold, rerank,
                          args.device, args.workers, not args.skip_benchmark)
 
     stage("Итог")

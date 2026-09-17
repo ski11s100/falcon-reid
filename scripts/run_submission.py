@@ -28,7 +28,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from falcon.data import read_manifest  # noqa: E402
-from falcon.extract import ExtractorConfig, FeatureExtractor  # noqa: E402
+from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import performance_score  # noqa: E402
 from falcon.submit import (  # noqa: E402
     SubmissionConfig,
@@ -42,7 +42,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Генерация файлов сдачи ФАЛЬКОН")
     parser.add_argument("dataset", type=Path, help="Каталог с test_query.csv, test_gallery.csv, images/")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, default=Path("models/best.pt"))
+    parser.add_argument("--checkpoints", type=Path, nargs="+",
+                        default=[Path("models/model-a.pt"), Path("models/model-b.pt")],
+                        help="Веса модели. Несколько файлов — ансамбль")
     parser.add_argument("--threshold", type=float, default=None,
                         help="Порог отказа. Без него отказываем на всех запросах")
     parser.add_argument("--device", default="cuda")
@@ -55,19 +57,20 @@ def main() -> None:
                         help="Дополнительно замерить latency и throughput")
     args = parser.parse_args()
 
-    if not args.checkpoint.is_file():
-        parser.error(f"Не найден чекпоинт {args.checkpoint}")
+    for path in args.checkpoints:
+        if not path.is_file():
+            parser.error(f"Не найден чекпоинт {path}")
 
     started = time.perf_counter()
     queries = read_manifest(args.dataset / "test_query.csv", args.dataset / "images")
     gallery = read_manifest(args.dataset / "test_gallery.csv", args.dataset / "images")
     print(json.dumps({"queries": len(queries), "gallery": len(gallery)}), flush=True)
 
-    extractor = FeatureExtractor(
-        checkpoint=args.checkpoint,
-        config=ExtractorConfig(batch_size=args.batch_size, num_workers=args.workers,
-                               device=args.device, half=True,
-                               flip_tta=not args.no_flip_tta),
+    extractor = build_extractor(
+        args.checkpoints,
+        ExtractorConfig(batch_size=args.batch_size, num_workers=args.workers,
+                        device=args.device, half=True,
+                        flip_tta=not args.no_flip_tta),
     )
 
     # Порядок строго фиксирован: сначала все query в порядке test_query.csv,

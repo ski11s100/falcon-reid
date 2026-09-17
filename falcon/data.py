@@ -208,15 +208,19 @@ def build_local_split(
     *,
     val_identity_fraction: float = 0.25,
     open_set_fraction: float = 0.20,
+    query_share: float = 0.35,
     seed: int = 42,
 ) -> LocalSplit:
     """Режет train.csv на обучение и локальный тест по протоколу организаторов.
 
     Правила:
       * ID обучения и ID валидации не пересекаются (open-set, раздел 5 ТЗ);
-      * у «закрытых» ID снимки делятся на галерею и запросы так, чтобы у запроса
-        оставался хотя бы один позитив С ДРУГОЙ КАМЕРЫ — иначе он junk и в mAP
-        не участвует;
+      * у «закрытых» ID снимки делятся на галерею и запросы СЛУЧАЙНО, как в
+        тесте организаторов: в галерее могут оказаться снимки того же ТС с той
+        же камеры. При расчёте mAP они отсеиваются как junk, но на близость
+        top-1 влияют, а значит и на калибровку порога отказа;
+      * при этом у запроса обязан остаться хотя бы один позитив С ДРУГОЙ
+        КАМЕРЫ — иначе он целиком junk и в mAP не участвует;
       * отдельная доля ID идёт целиком в запросы и никогда в галерею: это и есть
         open-set запросы, на которых считается TNR.
     """
@@ -241,42 +245,66 @@ def build_local_split(
     train_ids = set(multi_camera[val_size:]) | set(single_camera)
     train = [r for r in rows if r.vehicle_id in train_ids]
 
+    # Сколько ID отдать под open-set. Доля считается по ЗАПРОСАМ (ответ 17), а
+    # open-set ID отдают в запросы все свои снимки, тогда как закрытые — только
+    # часть. Отсюда поправка на среднее число снимков.
+    # Вывод формулы. При среднем n снимков на ID закрытый даёт n*query_share
+    # запросов, open-set — все n. Для доли f открытых запросов из
+    #     f = O*n / (O*n + C*n*query_share),  C = V - O
+    # следует O = k*V/(1+k), где k = f*query_share/(1-f).
+    open_ids: set[str] = set()
+    if open_set_fraction > 0:
+        k = open_set_fraction * query_share / (1.0 - open_set_fraction)
+        open_count = max(1, round(k * len(val_ids) / (1.0 + k)))
+        open_ids = set(val_ids[:min(open_count, len(val_ids) - 2)])
+
     gallery: list[Observation] = []
     query: list[Observation] = []
     open_query_ids: set[str] = set()
 
-    # Сначала закрытая часть: у каждого ID одна камера уходит в запросы,
-    # остальные в галерею — так у запроса гарантированно есть кросс-камерный позитив.
-    closed_pool: list[str] = []
     for vid in val_ids:
-        by_camera: dict[str, list[Observation]] = defaultdict(list)
-        for shot in groups[vid]:
-            by_camera[str(shot.camera_id)].append(shot)
-        cameras = sorted(by_camera)
-        rng.shuffle(cameras)
-        closed_pool.append(vid)
-        query.extend(by_camera[cameras[0]])
-        for camera in cameras[1:]:
-            gallery.extend(by_camera[camera])
+        shots = sorted(groups[vid], key=lambda r: r.image_id)
 
-    # Теперь добираем open-set ID так, чтобы они дали примерно open_set_fraction
-    # от ИТОГОВОГО числа запросов (ответ 17 говорит о доле запросов, не ID).
-    # Их ID целиком выводятся из галереи: пары для них не существует.
-    # query на этом шаге уже содержит ВСЕ запросы, поэтому доля берётся от него
-    # напрямую: перевод open-set ID не добавляет запросов, а только убирает
-    # соответствующие снимки из галереи.
-    target_open_rows = open_set_fraction * len(query)
-    open_rows = 0
-    for vid in list(closed_pool):
-        if open_rows >= target_open_rows:
-            break
-        moved = [r for r in gallery if r.vehicle_id == vid]
-        if not moved:
+        if vid in open_ids:
+            # Машины, которой нет в базе: все снимки в запросы, ничего в галерею.
+            query.extend(shots)
+            open_query_ids.update(shot.image_id for shot in shots)
             continue
-        # Убираем ID из галереи целиком: его запросы становятся open-set.
-        gallery = [r for r in gallery if r.vehicle_id != vid]
-        open_query_ids.update(r.image_id for r in query if r.vehicle_id == vid)
-        open_rows = sum(1 for r in query if r.image_id in open_query_ids)
+
+        # Снимки делятся СЛУЧАЙНО, без изоляции камеры. Это принципиально:
+        # в тесте организаторов у запроса могут быть снимки того же ТС с той же
+        # камеры — правило их отсева при расчёте mAP описано в ответе 11, значит
+        # они там есть. Прежняя версия отправляла камеру целиком в запросы, и в
+        # галерее не оставалось ни одного снимка с той же камеры. Распределение
+        # близости получалось совершенно другим: медиана top-1 на локальной
+        # валидации 0.41 против 0.87 на тесте, и порог отказа калибровался не на
+        # том. После исправления медиана совпала с тестовой.
+        cut = max(1, round(len(shots) * query_share))
+        cameras = {str(r.camera_id) for r in shots}
+        if len(cameras) < 2:
+            continue
+
+        # У запроса обязан остаться хотя бы один КРОСС-КАМЕРНЫЙ позитив в
+        # галерее, иначе он junk и выпадает из mAP. Вместо того чтобы отбрасывать
+        # неудачные жеребьёвки (так терялось больше половины ID), запросы
+        # набираются из снимков ОДНОЙ случайной камеры, а в галерею гарантированно
+        # попадают все остальные. Внутри камеры выбор случаен, поэтому снимки той
+        # же камеры в галерее остаются — ради чего всё и затевалось.
+        by_camera: dict[str, list[Observation]] = defaultdict(list)
+        for shot in shots:
+            by_camera[str(shot.camera_id)].append(shot)
+
+        picked = rng.choice(sorted(by_camera))
+        pool = list(by_camera[picked])
+        rng.shuffle(pool)
+        candidate_query = pool[:max(1, min(cut, len(pool) - 0))]
+        rest = [r for r in shots if r not in candidate_query]
+
+        if not any(str(r.camera_id) != picked for r in rest):
+            continue
+
+        query.extend(candidate_query)
+        gallery.extend(rest)
 
     return LocalSplit(train=train, gallery=gallery, query=query, open_set_query_ids=open_query_ids)
 

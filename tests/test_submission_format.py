@@ -131,6 +131,46 @@ class TestRerankCompliance(unittest.TestCase):
         self.assertTrue(np.all(np.diff(scores) <= 1e-6), "Оценки должны убывать")
 
 
+class TestConfidenceScale(unittest.TestCase):
+    """Уверенность обязана быть в одной шкале с калибровкой порога.
+
+    Переранжирование выдаёт оценки в другой шкале (смесь расстояний со знаком
+    минус). Однажды оно включилось автоматически, и порог, найденный на
+    косинусе, отклонил все 1110 запросов — режим кандидатов обнулился.
+    """
+
+    def setUp(self):
+        rng = np.random.default_rng(3)
+        self.queries = rng.normal(size=(20, 48)).astype(np.float32)
+        self.gallery = rng.normal(size=(200, 48)).astype(np.float32)
+
+    def test_scores_are_cosine_with_and_without_rerank(self):
+        plain, _ = build_ranking(self.queries, self.gallery,
+                                 SubmissionConfig(use_rerank=False), progress=False)
+        _, plain_scores = build_ranking(self.queries, self.gallery,
+                                        SubmissionConfig(use_rerank=False), progress=False)
+        _, rerank_scores = build_ranking(self.queries, self.gallery,
+                                         SubmissionConfig(use_rerank=True, rerank_pool=80),
+                                         progress=False)
+        for name, scores in (("без re-rank", plain_scores), ("с re-rank", rerank_scores)):
+            self.assertTrue((scores >= -1.0001).all() and (scores <= 1.0001).all(),
+                            f"{name}: оценки вне диапазона косинуса: "
+                            f"[{scores.min():.3f}, {scores.max():.3f}]")
+            self.assertGreater(scores.max(), 0.0,
+                               f"{name}: все оценки неположительные — шкала не косинусная")
+
+    def test_rerank_scores_match_recomputed_cosine(self):
+        indices, scores = build_ranking(self.queries, self.gallery,
+                                        SubmissionConfig(use_rerank=True, rerank_pool=80),
+                                        progress=False)
+        from falcon.metrics import l2_normalize
+        q = l2_normalize(self.queries)
+        g = l2_normalize(self.gallery)
+        for i in range(len(q)):
+            expected = g[indices[i]] @ q[i]
+            np.testing.assert_allclose(scores[i], expected, atol=1e-5)
+
+
 class TestCalibration(unittest.TestCase):
     def setUp(self):
         self.gallery_labels = {"g1": Identity("A", "c2"), "g2": Identity("B", "c2")}
