@@ -130,3 +130,4 @@ class HealthResponse(BaseModel):
     gallery_size: int
     threshold_calibrated: bool
     storage: str
+    search: str = Field(description="Режим поиска: hnsw или exact")

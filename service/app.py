@@ -190,6 +190,7 @@ def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
         gallery_size=repository.count() if repository else 0,
         threshold_calibrated=settings.match_threshold is not None,
         storage=state.storage_name,
+        search=getattr(repository, "ann_index", "exact") if repository else "нет",
     )
 
 

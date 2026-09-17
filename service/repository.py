@@ -44,6 +44,9 @@ class Match:
 class VectorRepository(Protocol):
     """Контракт хранилища. Реализации взаимозаменяемы для сервиса."""
 
+    #: какой поиск фактически используется: "hnsw" или "exact"
+    ann_index: str
+
     def initialise(self, dimension: int) -> None: ...
     def upsert(self, items: list[GalleryItem]) -> int: ...
     def search(self, embedding: np.ndarray, top_k: int) -> list[Match]: ...
@@ -92,15 +95,46 @@ class PgVectorRepository:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
-            # HNSW: приближённый поиск, который держит скорость на больших
-            # галереях. Раздел 10 ТЗ отдельно просит это продемонстрировать.
-            self.connection.execute(f"""
-                CREATE INDEX IF NOT EXISTS {self.table}_embedding_hnsw
-                ON {self.table} USING hnsw (embedding vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-            """)
             self.connection.execute(
                 f"CREATE INDEX IF NOT EXISTS {self.table}_vehicle_id ON {self.table} (vehicle_id)")
+
+        self.ann_index = self._try_create_ann_index(dimension)
+
+    def _try_create_ann_index(self, dimension: int) -> str:
+        """Пытается построить HNSW-индекс, но не падает, если это невозможно.
+
+        pgvector строит HNSW только для векторов не длиннее 2000 измерений.
+        Наш эмбеддинг — 2048 (и 4096 у ансамбля), поэтому индекс не создаётся.
+        Раньше исключение здесь убивало запуск сервиса: контейнер уходил в
+        бесконечный перезапуск с сообщением про размерность, никак не связанным
+        с тем, что видел пользователь.
+
+        Отсутствие индекса не деградация. Измерения (docs/SCALABILITY.md)
+        показали, что точный перебор быстрее приближённого поиска вплоть до
+        сотни тысяч объектов, а демонстрационная галерея на порядки меньше.
+        HNSW нужен от 10^6 объектов — но там и размерность придётся понижать:
+        2048 измерений на миллион векторов это 8 ГБ только под данные.
+        """
+        try:
+            with self._lock:
+                self.connection.execute(f"""
+                    CREATE INDEX IF NOT EXISTS {self.table}_embedding_hnsw
+                    ON {self.table} USING hnsw (embedding vector_cosine_ops)
+                    WITH (m = 16, ef_construction = 64)
+                """)
+            return "hnsw"
+        except self._psycopg.errors.ProgramLimitExceeded:
+            print(json.dumps({
+                "ann_index": {
+                    "status": "не создан",
+                    "dimension": dimension,
+                    "limit": 2000,
+                    "reason": "pgvector строит HNSW только до 2000 измерений",
+                    "effect": "поиск идёт точным перебором; на галерее такого "
+                              "размера он и так быстрее (docs/SCALABILITY.md)",
+                }
+            }, ensure_ascii=False), flush=True)
+            return "exact"
 
     def upsert(self, items: list[GalleryItem]) -> int:
         if not items:
@@ -178,6 +212,7 @@ class SQLiteRepository:
 
     def initialise(self, dimension: int) -> None:
         self._dimension = dimension
+        self.ann_index = "exact"
         with self._lock:
             self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS gallery (

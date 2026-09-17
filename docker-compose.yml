@@ -35,7 +35,7 @@ services:
         condition: service_healthy
     environment:
       FALCON_DATABASE_DSN: postgresql://falcon:falcon@postgres:5432/falcon
-      FALCON_CHECKPOINT: /opt/falcon/models/best.pt
+      FALCON_CHECKPOINT: /opt/falcon/models/model-b.pt
       FALCON_DEVICE: cuda
       FALCON_HOST: "0.0.0.0"
       FALCON_PORT: "8000"
