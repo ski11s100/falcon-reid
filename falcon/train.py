@@ -61,7 +61,9 @@ class TrainConfig:
     amp: bool = True
     seed: int = 42
     eval_every: int = 2
-    grad_checkpointing: bool = False
+    # На 6 ГБ видеопамяти окупается всегда: батч 64 иначе уходит в
+    # вытеснение и замедляется восьмикратно (см. autoconfigure_batch).
+    grad_checkpointing: bool = True
 
 
 def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
@@ -84,13 +86,40 @@ def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
 
     free_bytes, total_bytes = torch.cuda.mem_get_info()
     free_gb = free_bytes / 1e9
-    # Эмпирическая оценка: около 0.085 ГБ на элемент батча плюс 0.3 ГБ на веса
-    # и состояние оптимизатора. Оставляем 15% запаса на фрагментацию.
-    affordable = int((free_gb * 0.85 - 0.3) / 0.085)
     requested = config.identities_per_batch * config.shots_per_identity
+
+    # Коэффициенты измерены на RTX 3060 Laptop, ResNet50-IBN-a, 256x256, AMP
+    # (scripts/measure_vram.py). Пик линеен по размеру батча:
+    #   без чекпоинтинга  0.085 ГБ/элемент,  с чекпоинтингом  0.037 ГБ/элемент.
+    per_item = 0.037 if config.grad_checkpointing else 0.085
+    base = 0.35  # веса, состояние Adam и центры классов
+
+    # Резерв аллокатора превышает пик примерно на 15%, плюс закреплённая память
+    # загрузчика и рост занятого другими приложениями. Берём 70% свободного:
+    # прошлый прогон с оценкой по 85% ушёл в вытеснение и замедлился впятеро.
+    budget = free_gb * 0.70 - base
+    affordable = max(8, int(budget / per_item))
 
     if affordable >= requested:
         return config
+
+    # Сначала пробуем спасти батч чекпоинтингом: на 6 ГБ он превращает батч 64
+    # из невозможного (5.47 ГБ и 3.42 с/шаг из-за вытеснения) в комфортный
+    # (2.37 ГБ и 0.44 с/шаг). Уменьшать батч — крайняя мера: batch-hard triplet
+    # ищет трудные пары внутри батча, и на маленьком их просто нет.
+    if not config.grad_checkpointing:
+        with_checkpointing = max(8, int((free_gb * 0.70 - base) / 0.037))
+        if with_checkpointing >= requested:
+            config.grad_checkpointing = True
+            print(json.dumps({"vram_autoconfig": {
+                "free_gb": round(free_gb, 2),
+                "batch": requested,
+                "action": "включён градиентный чекпоинтинг",
+                "reason": "батч сохранён целиком, память втрое меньше, цена около 30% скорости",
+            }}, ensure_ascii=False), flush=True)
+            return config
+        config.grad_checkpointing = True
+        affordable = with_checkpointing
 
     safe_identities = max(4, affordable // config.shots_per_identity)
     print(json.dumps({
@@ -100,8 +129,9 @@ def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
             "requested_batch": requested,
             "reduced_batch": safe_identities * config.shots_per_identity,
             "identities_per_batch": safe_identities,
-            "hint": "закройте браузер и другие приложения, чтобы освободить видеопамять — "
-                    "больший батч заметно улучшает batch-hard triplet",
+            "grad_checkpointing": True,
+            "hint": "закройте браузер и другие приложения — больший батч заметно "
+                    "улучшает batch-hard triplet",
         }
     }, ensure_ascii=False), flush=True)
 
@@ -227,6 +257,7 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
                         pretrained=resume is None)
     if resume is not None:
         load_transferred_weights(model, resume)
+    model.set_gradient_checkpointing(config.grad_checkpointing)
     model.to(device)
 
     criterion = ReIDCriterion(

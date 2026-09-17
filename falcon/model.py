@@ -33,6 +33,7 @@ from pathlib import Path
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 # Официальные веса IBN-Net (XingangPan/IBN-Net, релиз v1.0).
 # Версия и контрольная сумма зафиксированы: раздел 7 ТЗ требует воспроизводимости,
@@ -133,8 +134,29 @@ class ResNetIBN(nn.Module):
             )
         return nn.Sequential(*layers)
 
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        """Пересчитывать активации при обратном проходе вместо хранения.
+
+        Память под активации падает втрое-вчетверо ценой примерно 30% скорости.
+        На видеокарте с 6 ГБ это единственный способ держать батч 64: batch-hard
+        triplet ищет самые трудные пары ВНУТРИ батча, и на маленьком батче
+        по-настоящему трудных пар просто не оказывается.
+
+        Альтернатива — уменьшить батч — дешевле по коду, но бьёт прямо по тому
+        механизму, ради которого triplet и используется.
+        """
+        self._checkpointing = enabled
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.maxpool(self.relu(self.bn1(self.conv1(x))))
+
+        if getattr(self, "_checkpointing", False) and self.training and x.requires_grad:
+            # use_reentrant=False — вариант, корректно работающий с BatchNorm
+            # и не требующий, чтобы все входы имели requires_grad.
+            for layer in (self.layer1, self.layer2, self.layer3, self.layer4):
+                x = checkpoint(layer, x, use_reentrant=False)
+            return x
+
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
@@ -218,6 +240,9 @@ class VehicleReID(nn.Module):
 
         logits = self.classifier(self.dropout(inference_feature))
         return triplet_feature, logits
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        self.backbone.set_gradient_checkpointing(enabled)
 
     @torch.inference_mode()
     def encode(self, images: torch.Tensor) -> torch.Tensor:
