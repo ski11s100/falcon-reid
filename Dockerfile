@@ -10,8 +10,13 @@
 # (ответ 30: RTX A5000, CUDA 12.2, доступ в контейнер через --gpus all).
 # Драйвер 12.2 совместим с рантаймом CUDA 12.6 благодаря minor version
 # compatibility внутри мажорной версии 12.
+#
+# Ubuntu 24.04, а не 22.04: там штатный Python 3.12, тот же, на котором решение
+# разрабатывалось и на котором измерены все метрики. В 22.04 пришлось бы тянуть
+# python3.11 из стороннего репозитория, то есть расходиться с окружением
+# разработки ради ничего.
 
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -19,21 +24,26 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-venv python3-pip \
-        libjpeg-turbo8 libpng16-16 \
+        python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf /usr/bin/python3.11 /usr/local/bin/python
+# Виртуальное окружение вместо установки в системный Python: свежие Ubuntu
+# помечают системный интерпретатор как externally-managed и запрещают в него
+# ставить пакеты (PEP 668). Venv заодно изолирует решение от системных
+# библиотек и делает сборку воспроизводимой.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /opt/falcon
 
 # Зависимости ставятся до копирования кода: слой кешируется и не пересобирается
 # при каждом изменении исходников.
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip==24.3.1 \
-    && python -m pip install torch==2.14.0 torchvision==0.29.0 \
+RUN pip install --upgrade pip \
+    && pip install torch==2.14.0 torchvision==0.29.0 \
          --index-url https://download.pytorch.org/whl/cu126 \
-    && python -m pip install -r requirements.txt
+    && pip install -r requirements.txt
 
 COPY falcon ./falcon
 COPY service ./service
@@ -53,11 +63,13 @@ RUN mkdir -p /opt/falcon/data
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status==200 else 1)"
 
-# По умолчанию поднимается сервис. Пакетная генерация файлов сдачи — отдельная
-# команда, она переопределяет CMD (см. docs/SUBMISSION.md):
-#   docker run --rm --gpus all -v /data:/data falcon \
-#       python scripts/run_submission.py /data --output /data/submission
+# По умолчанию поднимается демонстрационный сервис. Пакетная генерация файлов
+# сдачи — отдельная команда, переопределяющая CMD:
+#
+#   docker run --rm --gpus all -v /путь/к/данным:/data falcon-api \
+#       python scripts/run_submission.py /data --output /data/submission \
+#       --checkpoints models/model-a.pt models/model-b.pt --threshold 0.411
 CMD ["python", "-m", "uvicorn", "service.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -15,9 +15,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 import statistics
-import zlib
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,80 @@ from torch.utils.data import DataLoader, Dataset
 from .data import Observation, load_crop
 from .model import VehicleReID, build_model
 from .transforms import DEFAULT_SIZE, build_eval_transform
+
+
+def shared_memory_mb() -> float | None:
+    """Сколько разделяемой памяти доступно. None, если раздела нет (Windows)."""
+    try:
+        return shutil.disk_usage("/dev/shm").total / 1024 / 1024
+    except (FileNotFoundError, OSError):
+        return None
+
+
+# Порога в 256 МБ хватает на батч 64 при 256x256 с запасом на префетч.
+SHM_MB = shared_memory_mb()
+USE_THREADS = SHM_MB is not None and SHM_MB < 256
+
+
+class ThreadedBatchLoader:
+    """Загрузчик на потоках вместо процессов. Не требует разделяемой памяти.
+
+    Зачем. DataLoader передаёт готовые тензоры между процессами через /dev/shm.
+    Контейнеру Docker этот раздел выдаётся размером 64 МБ, чего не хватает даже
+    на один батч 256x256, и прогон падает с «No space left on device» посреди
+    извлечения признаков. Стратегия file_system эту проблему не решает: она
+    использует тот же раздел.
+
+    Полагаться на флаг --shm-size нельзя: команду запуска задают организаторы
+    (ответ 40), и требовать от них дополнительных параметров мы не можем.
+
+    Почему потоки здесь работают. Узкое место этой задачи — декодирование JPEG
+    кадра 1920x1080, а Pillow на время декодирования освобождает GIL. Поэтому
+    потоки дают настоящую параллельность, а тензоры остаются в общей памяти
+    процесса, и /dev/shm не участвует вовсе.
+    """
+
+    def __init__(self, dataset: Dataset, batch_size: int, num_workers: int,
+                 prefetch_batches: int = 3):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.num_workers = max(1, num_workers)
+        self.prefetch_batches = max(1, prefetch_batches)
+
+    def __len__(self) -> int:
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from torch.utils.data._utils.collate import default_collate
+
+        total = len(self.dataset)
+        with ThreadPoolExecutor(max_workers=self.num_workers) as pool:
+            pending: list = []
+            next_index = 0
+            # Окно префетча ограничено, иначе в память уедет весь набор сразу.
+            window = self.prefetch_batches * self.batch_size
+
+            while next_index < total or pending:
+                while next_index < total and len(pending) < window:
+                    pending.append(pool.submit(self.dataset.__getitem__, next_index))
+                    next_index += 1
+
+                take = min(self.batch_size, len(pending))
+                batch = [future.result() for future in pending[:take]]
+                del pending[:take]
+                yield default_collate(batch)
+
+
+def build_loader(dataset: Dataset, batch_size: int, num_workers: int, pin_memory: bool):
+    """DataLoader на процессах, либо потоковый вариант при малом /dev/shm."""
+    if USE_THREADS and num_workers > 0:
+        return ThreadedBatchLoader(dataset, batch_size, num_workers)
+    return DataLoader(
+        dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+        pin_memory=pin_memory, persistent_workers=False,
+        prefetch_factor=4 if num_workers > 0 else None,
+    )
 
 
 class CropDataset(Dataset):
@@ -52,7 +127,7 @@ class CropDataset(Dataset):
         return tensor, self.labels[row.vehicle_id], _camera_code(row.camera_id), index
 
 
-def shutdown_loader(loader: DataLoader) -> None:
+def shutdown_loader(loader) -> None:
     """Освобождает воркеров разового загрузчика.
 
     Реализация намеренно НЕ трогает приватный `_shutdown_workers()`. Первая
@@ -63,8 +138,10 @@ def shutdown_loader(loader: DataLoader) -> None:
 
     Достаточно снять ссылку на итератор: загрузчики здесь создаются без
     persistent_workers, поэтому воркеры завершаются штатно по исчерпании.
+    Потоковый загрузчик закрывать не нужно — его пул живёт внутри __iter__.
     """
-    loader._iterator = None
+    if isinstance(loader, DataLoader):
+        loader._iterator = None
 
 
 def _camera_code(camera_id: str | None) -> int:
@@ -189,17 +266,10 @@ class FeatureExtractor:
 
     def extract(self, rows: list[Observation], progress: bool = True) -> np.ndarray:
         """Матрица (len(rows), feature_dim) в порядке, строго совпадающем с rows."""
-        loader = DataLoader(
+        loader = build_loader(
             CropDataset(rows, self.transform, self.config.size),
-            batch_size=self.config.batch_size,
-            shuffle=False,
-            num_workers=self.config.num_workers,
+            self.config.batch_size, self.config.num_workers,
             pin_memory=self.device.type == "cuda",
-            # persistent_workers здесь НЕ нужен: загрузчик создаётся на один
-            # проход и больше не переиспользуется. Персистентность только держала
-            # бы процессы живыми и требовала ручного закрытия, которое и привело
-            # к взаимоблоку на Windows.
-            persistent_workers=False,
         )
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         started = time.perf_counter()
@@ -213,9 +283,6 @@ class FeatureExtractor:
                     print(json.dumps({"extracted": done, "total": len(rows),
                                       "fps": round(rate, 1)}), flush=True)
         finally:
-            # persistent_workers держит процессы живыми, пока жив загрузчик.
-            # Во время обучения extract() вызывается на каждой валидации, и без
-            # явного закрытия воркеры накапливаются десятками процессов.
             shutdown_loader(loader)
         return output
 
@@ -276,17 +343,10 @@ class FeatureExtractor:
             # перезапускался бы каждые пару шагов, и замер мерил бы не решение,
             # а накладные расходы на обход набора.
             sample = (rows * (1 + 40 * batch_size // max(1, len(rows))))[: 40 * batch_size]
-            loader = DataLoader(
+            loader = build_loader(
                 CropDataset(sample, self.transform, self.config.size),
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=self.config.num_workers,
+                batch_size, self.config.num_workers,
                 pin_memory=self.device.type == "cuda",
-                # Здесь персистентность оправдана: загрузчик обходится много раз
-                # подряд в течение замера, и перезапуск процессов на каждом
-                # проходе исказил бы результат.
-                persistent_workers=self.config.num_workers > 0,
-                prefetch_factor=4 if self.config.num_workers > 0 else None,
             )
 
             # Прогрев: первый проход оплачивает запуск воркеров и подбор
@@ -392,11 +452,10 @@ class EnsembleExtractor:
     def extract(self, rows: list[Observation], progress: bool = True) -> np.ndarray:
         # Кадры читаются и декодируются ОДИН раз на все модели: это самая дорогая
         # часть цикла, и дублировать её было бы прямой потерей скорости.
-        loader = DataLoader(
+        loader = build_loader(
             CropDataset(rows, self.transform, self.config.size),
-            batch_size=self.config.batch_size, shuffle=False,
-            num_workers=self.config.num_workers,
-            pin_memory=self.device.type == "cuda", persistent_workers=False,
+            self.config.batch_size, self.config.num_workers,
+            pin_memory=self.device.type == "cuda",
         )
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         done = 0
