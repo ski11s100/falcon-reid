@@ -514,8 +514,20 @@ def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None 
     return path
 
 
+LFS_POINTER_PREFIX = b"version https://git-lfs"
+
+
 def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
     path = Path(path)
+    # Без Git LFS (или из ZIP-архива GitHub) вместо весов приходит текстовый
+    # указатель на 134 байта. torch.load падает на нём с невнятной ошибкой
+    # распаковки, поэтому распознаём его сами и говорим, что делать.
+    with path.open("rb") as handle:
+        if handle.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX:
+            raise RuntimeError(
+                f"{path} — указатель Git LFS, а не веса модели. "
+                f"Установите Git LFS и выполните: git lfs install && git lfs pull"
+            )
     state = torch.load(path, map_location="cpu", weights_only=False)
     if state.get("architecture") != VehicleReID.ARCHITECTURE:
         raise ValueError(

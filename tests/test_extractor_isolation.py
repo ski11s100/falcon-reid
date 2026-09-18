@@ -149,5 +149,21 @@ class TestCameraCodeStability(unittest.TestCase):
         self.assertEqual(len(codes), 20, "Коды камер столкнулись")
 
 
+class TestLfsPointerIsRecognised(unittest.TestCase):
+    """ZIP-архив GitHub содержит вместо весов указатель LFS: нужна ясная ошибка."""
+
+    def test_pointer_gives_clear_message(self):
+        import tempfile
+
+        from falcon.extract import load_checkpoint
+        with tempfile.TemporaryDirectory() as directory:
+            pointer = Path(directory) / "model-a.pt"
+            pointer.write_text(
+                "version https://git-lfs.github.com/spec/v1\n"
+                "oid sha256:f13cc6b46f177f92739c\nsize 103840850\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "git lfs pull"):
+                load_checkpoint(pointer)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
