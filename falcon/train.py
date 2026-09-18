@@ -68,6 +68,13 @@ class TrainConfig:
     num_workers: int = 4
     amp: bool = True
     seed: int = 42
+    # Зерно разбиения на обучение и проверку — ОТДЕЛЬНО от зерна обучения.
+    # Раньше одно зерно определяло и порядок данных, и состав проверочной
+    # выборки. Модели ансамбля обучались с разными зёрнами ради разнообразия,
+    # и каждая видела при обучении машины, проверочные для остальных. При
+    # сравнении на общем сплите это давало утечку и завышало результат.
+    # Разнообразие берём из зерна обучения, а разбиение у всех одно.
+    split_seed: int = 42
     eval_every: int = 2
     # На 6 ГБ видеопамяти окупается всегда: батч 64 иначе уходит в
     # вытеснение и замедляется восьмикратно (см. autoconfigure_batch).
@@ -267,7 +274,7 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     dataset_audit = audit(rows)
     print(json.dumps({"audit": dataset_audit}, ensure_ascii=False), flush=True)
 
-    split = build_local_split(rows, seed=config.seed)
+    split = build_local_split(rows, seed=config.split_seed)
     print(json.dumps({"split": split.summary()}, ensure_ascii=False), flush=True)
     (output_dir / "split.json").write_text(json.dumps({
         "train_ids": sorted({r.vehicle_id for r in split.train}),

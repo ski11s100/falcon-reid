@@ -64,7 +64,11 @@ def train_model(dataset: Path, output: Path, epochs: int, seed: int,
 
     log(f"обучение {output.name}: {epochs} эпох, seed={seed}, "
         f"инициализация {'VeRi' if resume else 'ImageNet'}")
-    config = TrainConfig(epochs=epochs, num_workers=workers, seed=seed, eval_every=10)
+    # Разбиение у всех моделей одно (split_seed=42), различается только зерно
+    # обучения. Иначе модели видят при обучении машины, проверочные для других,
+    # и сравнение ансамблей на общем сплите становится нечестным.
+    config = TrainConfig(epochs=epochs, num_workers=workers, seed=seed, split_seed=42,
+                         eval_every=10)
     result = train(dataset, output, config, device=device, resume=resume)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return checkpoint
@@ -119,6 +123,12 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--veri", type=Path, default=ROOT / "runs" / "veri-pretrain" / "best.pt")
+    parser.add_argument("--extra", type=Path, nargs="*", default=[
+        ROOT / "runs" / "v1" / "model" / "best.pt",
+        ROOT / "runs" / "v2-veri" / "model" / "best.pt",
+    ], help="Уже обученные модели, которые тоже участвуют в переборе ансамблей")
+    parser.add_argument("--max-ensemble", type=int, default=3,
+                        help="Больше трёх моделей не укладывается в бюджет задержки")
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -143,6 +153,12 @@ def main() -> None:
             # а ансамбль соберётся из того, что получилось.
             print(f"ОШИБКА при обучении {name}: {exc}", flush=True)
 
+    # Прежние модели обучались на том же разбиении (зерно 42), поэтому их
+    # можно честно сравнивать и комбинировать с новыми.
+    for path in args.extra:
+        if path.is_file():
+            checkpoints[path.parent.parent.name] = path
+
     available = {k: v for k, v in checkpoints.items() if v.is_file()}
     if not available:
         raise SystemExit("ни одной обученной модели")
@@ -154,7 +170,7 @@ def main() -> None:
 
     results: list[dict] = []
     names = sorted(available)
-    for size in range(1, len(names) + 1):
+    for size in range(1, min(len(names), args.max_ensemble) + 1):
         for combo in itertools.combinations(names, size):
             paths = [available[n] for n in combo]
             metrics = evaluate_combo(paths, split, args.workers, args.device)
