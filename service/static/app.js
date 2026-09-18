@@ -23,11 +23,15 @@ const state = {
   height: 0,
   lastSearch: null,     // ответ /api/search вместе с тем, что искали
   explainCache: new Map(),
+  view: "vehicles",     // «по машинам» или «все снимки»
+  history: [],          // недавние запросы этого сеанса
 };
 
 const scene = window.CityScene ? new CityScene($("map"), $("ticker")) : null;
 
 scene?.start();
+// Щелчок по снимку кандидата на схеме открывает то же окно сравнения.
+if (scene) scene.onPick = (index) => openCompare(index);
 
 /* ---------- Связь с сервером ---------- */
 
@@ -90,10 +94,11 @@ async function refreshStatus() {
     const health = await (await fetch("/api/health")).json();
     const ok = health.status === "ok";
     setSignal(ok ? "готов" : "модель не загружена", ok ? "ok" : "alert");
-    $("st-model").textContent = health.model;
-    $("st-device").textContent = health.device === "cuda" ? "GPU" : health.device;
+    $("st-model").textContent = health.model_summary || health.model;
+    $("st-model").title = health.model;
+    $("st-device").textContent = health.device === "cuda" ? "GPU" : health.device.toUpperCase();
     $("m-gallery").textContent = health.gallery_size.toLocaleString("ru-RU");
-    $("m-threshold").textContent = health.threshold_calibrated ? "задан" : "нет";
+    $("m-threshold").textContent = health.threshold != null ? formatThreshold(health.threshold) : "не задан";
     if (health.embedding_dim) $("m-dim").textContent = health.embedding_dim.toLocaleString("ru-RU");
   } catch {
     setSignal("сервис недоступен", "alert");
@@ -292,8 +297,10 @@ async function search() {
     // Волна по камерам должна успеть стать заметной, даже если сервер ответил
     // за десятки миллисекунд: иначе оператор не увидит, что поиск был.
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, 700 - (performance.now() - started))));
-    state.lastSearch = { data, request, fileName: state.fileName, cropUrl: queryCropUrl(), at: new Date() };
+    state.lastSearch = { data, request, fileName: state.fileName, cropUrl: queryCropUrl(), at: new Date(),
+                         frame: { dataUrl: state.dataUrl, width: state.width, height: state.height } };
     state.explainCache.clear();
+    remember(state.lastSearch);
     renderSearch(data);
     $("m-last").textContent = `${Math.round(data.elapsed_ms)} мс`;
     scene?.setScanning(false);
@@ -319,6 +326,7 @@ $("btn-register").addEventListener("click", async () => {
       payload({ image_id: `ui-${Date.now()}`, vehicle_id: vehicleId || null }));
     toast(`Добавлено в галерею: ${data.vehicle_id || "без ID"} · всего снимков ${data.gallery_size}`);
     refreshStatus();
+    loadGallery();
   } catch (error) {
     toast(error.message);
   } finally {
@@ -380,6 +388,7 @@ $("batch").addEventListener("change", async (event) => {
   renderBatch(registered, files.length, errors.length ? `Готово, замечаний: ${errors.length}` : "Готово", errors);
   event.target.value = "";
   refreshStatus();
+  loadGallery();
 });
 
 /* ---------- Результат ---------- */
@@ -419,6 +428,118 @@ function ringSvg(values, colour) {
        + `<title>Цифровой отпечаток</title><path d="${path}" stroke="${colour}" stroke-width="1" fill="none"/></svg>`;
 }
 
+function thumbHtml(candidate, className = "candidate__thumb") {
+  return candidate.thumbnail
+    ? `<img class="${className}" src="${candidate.thumbnail}" alt="">`
+    : `<span class="${className}">нет снимка</span>`;
+}
+
+/* Шкала уверенности: где лежат кандидаты относительно порога. Делает
+ * решение «совпадение или отказ» видимым, а не только словом в вердикте. */
+function renderConfidence(data) {
+  const threshold = data.threshold;
+  const position = (score) => `${Math.max(0, Math.min(100, score * 100)).toFixed(1)}%`;
+  const dots = data.candidates.map((c, index) => `
+    <button type="button" class="confidence__dot ${isOver(c, threshold) ? "confidence__dot--over" : ""}
+      ${index === 0 ? "confidence__dot--top" : ""}" style="left:${position(c.score)}" data-index="${index}"
+      title="${escapeHtml(c.vehicle_id || c.image_id)} · ${c.score.toFixed(3)}"
+      aria-label="Кандидат ${index + 1}, сходство ${c.score.toFixed(3)}"></button>`).join("");
+  $("confidence").innerHTML = `
+    <div class="confidence__track">
+      ${threshold !== null ? `<span class="confidence__zone" style="left:${position(threshold)}"></span>
+        <span class="confidence__threshold" style="left:${position(threshold)}">
+          <span>порог ${threshold.toFixed(2)}</span></span>` : ""}
+      ${dots}
+    </div>
+    <div class="confidence__scale"><span>0</span><span>0.25</span><span>0.5</span><span>0.75</span><span>1 · сходство</span></div>`;
+}
+
+/* Кандидаты одной машины собираются в одну карточку: оператору важно, какая
+ * это машина и насколько уверенно, а не пять одинаковых строк подряд. */
+function groupByVehicle(candidates) {
+  const groups = new Map();
+  candidates.forEach((candidate, index) => {
+    const key = candidate.vehicle_id || `снимок:${candidate.image_id}`;
+    if (!groups.has(key)) groups.set(key, { vehicle: candidate.vehicle_id, items: [] });
+    groups.get(key).items.push({ candidate, index });
+  });
+  return [...groups.values()];
+}
+
+function renderShots(data) {
+  const threshold = data.threshold;
+  return data.candidates.map((candidate, index) => {
+    const over = isOver(candidate, threshold);
+    const width = Math.max(0, Math.min(100, candidate.score * 100));
+    const vehicle = escapeHtml(candidate.vehicle_id || "без ID");
+    return `
+      <li><button type="button" class="candidate ${over ? "candidate--over" : ""}"
+          data-index="${index}" style="animation-delay:${index * 30}ms"
+          aria-label="Кандидат ${index + 1}: ${vehicle}, сходство ${candidate.score.toFixed(3)}">
+        <span class="candidate__rank">${index + 1}</span>
+        ${thumbHtml(candidate)}
+        <span class="candidate__info">
+          <span class="candidate__vehicle">${vehicle}</span>
+          <span class="candidate__id">${escapeHtml(candidate.image_id)}</span>
+          <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
+        </span>
+        ${ringSvg(candidate.fingerprint, over ? "#34c98b" : "#7cc4ff")}
+        <span class="candidate__score">${candidate.score.toFixed(3)}</span>
+      </button></li>`;
+  }).join("");
+}
+
+function renderVehicles(data) {
+  const threshold = data.threshold;
+  return groupByVehicle(data.candidates).map((group, position) => {
+    const best = group.items[0];
+    const over = group.items.filter(({ candidate }) => isOver(candidate, threshold)).length;
+    const width = Math.max(0, Math.min(100, best.candidate.score * 100));
+    const shots = group.items.map(({ candidate, index }) => `
+      <button type="button" class="shot ${isOver(candidate, threshold) ? "shot--over" : ""}" data-index="${index}"
+        aria-label="Снимок ${index + 1}, сходство ${candidate.score.toFixed(3)}">
+        ${thumbHtml(candidate, "shot__image")}
+        <span class="shot__score">${candidate.score.toFixed(2)}</span>
+      </button>`).join("");
+    const count = group.items.length;
+    return `
+      <li class="group ${over ? "group--over" : ""}" style="animation-delay:${position * 40}ms">
+        <div class="group__head">
+          <span class="group__rank">${position + 1}</span>
+          <div class="group__title">
+            <span class="group__vehicle">${escapeHtml(group.vehicle || "без ID")}</span>
+            <span class="group__meta">${count} ${plural(count, "снимок", "снимка", "снимков")} в десятке${
+              threshold !== null ? ` · выше порога: ${over}` : ""}</span>
+          </div>
+          ${ringSvg(best.candidate.fingerprint, over ? "#34c98b" : "#7cc4ff")}
+          <span class="group__score" title="Лучшее сходство">${best.candidate.score.toFixed(3)}</span>
+        </div>
+        <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
+        <div class="group__shots">${shots}</div>
+      </li>`;
+  }).join("");
+}
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function renderCandidates() {
+  const data = state.lastSearch?.data;
+  if (!data) return;
+  const list = $("candidates");
+  list.className = `candidates candidates--${state.view}`;
+  list.innerHTML = data.candidates.length
+    ? (state.view === "vehicles" ? renderVehicles(data) : renderShots(data))
+    : '<li class="result-meta">Галерея пуста: загрузите снимки пачкой слева</li>';
+  document.querySelectorAll(".segmented__option").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.view === state.view));
+  });
+}
+
 function renderSearch(data) {
   const view = VERDICTS[data.verdict] || VERDICTS["совпадений нет"];
   const threshold = data.threshold;
@@ -431,33 +552,12 @@ function renderSearch(data) {
       <p class="verdict__note">${escapeHtml(data.refusal_reason || "Лучший кандидат выше порога уверенности")}</p>
     </div>`;
   $("result-meta").textContent = `${Math.round(data.elapsed_ms)} мс · рамка ${data.quality.width}×${data.quality.height}`
-    + (threshold !== null ? ` · порог ${threshold.toFixed(3)}` : "") + " · нажмите на кандидата, чтобы сравнить";
-
-  $("candidates").innerHTML = data.candidates.map((candidate, index) => {
-    const over = isOver(candidate, threshold);
-    const width = Math.max(0, Math.min(100, candidate.score * 100));
-    const vehicle = escapeHtml(candidate.vehicle_id || "без ID");
-    const thumb = candidate.thumbnail
-      ? `<img class="candidate__thumb" src="${candidate.thumbnail}" alt="">`
-      : `<span class="candidate__thumb">нет снимка</span>`;
-    return `
-      <li><button type="button" class="candidate ${over ? "candidate--over" : ""}"
-          data-index="${index}" style="animation-delay:${index * 30}ms"
-          aria-label="Кандидат ${index + 1}: ${vehicle}, сходство ${candidate.score.toFixed(3)}">
-        <span class="candidate__rank">${index + 1}</span>
-        ${thumb}
-        <span class="candidate__info">
-          <span class="candidate__vehicle">${vehicle}</span>
-          <span class="candidate__id">${escapeHtml(candidate.image_id)}</span>
-          <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
-        </span>
-        ${ringSvg(candidate.fingerprint, over ? "#34c98b" : "#7cc4ff")}
-        <span class="candidate__score">${candidate.score.toFixed(3)}</span>
-      </button></li>`;
-  }).join("") || '<li class="result-meta">Галерея пуста: загрузите снимки пачкой слева</li>';
-
+    + (threshold !== null ? ` · порог ${formatThreshold(threshold)}` : "") + " · нажмите на снимок, чтобы сравнить";
+  renderConfidence(data);
+  renderCandidates();
   $("warnings").innerHTML = data.quality.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
-  document.querySelector(".export").hidden = !data.candidates.length;
+  document.querySelector(".result-tools").hidden = !data.candidates.length;
+  $("confidence").hidden = !data.candidates.length;
   showResultBody();
 }
 
@@ -474,15 +574,33 @@ function renderError(message) {
   $("result-meta").textContent = "";
   $("candidates").innerHTML = "";
   $("warnings").innerHTML = "";
-  document.querySelector(".export").hidden = true;
+  $("confidence").hidden = true;
+  document.querySelector(".result-tools").hidden = true;
   showResultBody();
   scene?.setCaption(`Ошибка: ${message}`);
 }
 
-$("candidates").addEventListener("click", (event) => {
-  const button = event.target.closest(".candidate");
-  if (button) openCompare(Number(button.dataset.index));
+// Любой элемент с data-index в результате — снимок кандидата: открыть сравнение.
+["candidates", "confidence"].forEach((id) => $(id).addEventListener("click", (event) => {
+  const target = event.target.closest("[data-index]");
+  if (target) openCompare(Number(target.dataset.index));
+}));
+
+// Наведение на кандидата подсвечивает его снимок на схеме города.
+$("candidates").addEventListener("mouseover", (event) => {
+  const target = event.target.closest("[data-index]");
+  scene?.setHighlight(target ? Number(target.dataset.index) : null);
 });
+$("candidates").addEventListener("mouseleave", () => scene?.setHighlight(null));
+
+document.querySelectorAll(".segmented__option").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.view = button.dataset.view;
+    try { localStorage.setItem("falcon-view", state.view); } catch { /* не критично */ }
+    renderCandidates();
+  });
+});
+try { state.view = localStorage.getItem("falcon-view") || state.view; } catch { /* по умолчанию */ }
 
 /* ---------- Сравнение с картой внимания ---------- */
 
@@ -493,19 +611,54 @@ function openCompare(index) {
   const threshold = search.data.threshold;
   const over = isOver(candidate, threshold);
 
+  const total = search.data.candidates.length;
   $("compare-title").textContent = `Кандидат ${index + 1}: ${candidate.vehicle_id || "без ID"}`;
+  $("compare-counter").textContent = `${index + 1} из ${total}`;
+  $("compare-prev").disabled = index === 0;
+  $("compare-next").disabled = index === total - 1;
   $("compare-meta").textContent = `Сходство ${candidate.score.toFixed(3)}` + (threshold !== null
-    ? (over ? ` — выше порога ${threshold.toFixed(3)}, совпадение` : ` — ниже порога ${threshold.toFixed(3)}`)
+    ? (over ? ` — выше порога ${formatThreshold(threshold)}, совпадение` : ` — ниже порога ${formatThreshold(threshold)}`)
     : "");
   $("compare-query").src = search.cropUrl;
   $("compare-candidate").src = candidate.thumbnail || "";
   $("compare-candidate-caption").textContent = candidate.image_id;
-  $("compare-heat").checked = false;
   $("compare-explain").textContent = "Включите «куда смотрела модель», чтобы увидеть области запроса, "
     + "на которые модель опиралась, сравнивая его с этим кандидатом (Grad-CAM).";
   $("compare").dataset.index = index;
-  $("compare").showModal();
+  if (!$("compare").open) {
+    $("compare-heat").checked = false;
+    $("compare").showModal();
+  } else if ($("compare-heat").checked) {
+    // Карта внимания остаётся включённой и при листании кандидатов.
+    $("compare-heat").dispatchEvent(new Event("change"));
+  }
 }
+
+function stepCompare(delta) {
+  const total = state.lastSearch?.data.candidates.length || 0;
+  const next = Number($("compare").dataset.index) + delta;
+  if (next >= 0 && next < total) openCompare(next);
+}
+
+$("compare-prev").addEventListener("click", () => stepCompare(-1));
+$("compare-next").addEventListener("click", () => stepCompare(1));
+// Esc закрываем сами: встроенное закрытие модального окна Chrome пропускает,
+// если окно открыто без свежего действия пользователя (правило CloseWatcher).
+document.querySelectorAll("dialog").forEach((dialog) => {
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); dialog.close(); }
+  });
+});
+
+$("compare").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft") { event.preventDefault(); stepCompare(-1); }
+  if (event.key === "ArrowRight") { event.preventDefault(); stepCompare(1); }
+  // H и Р — одна клавиша в латинской и русской раскладке.
+  if (["h", "H", "р", "Р"].includes(event.key)) {
+    $("compare-heat").checked = !$("compare-heat").checked;
+    $("compare-heat").dispatchEvent(new Event("change"));
+  }
+});
 
 $("compare-heat").addEventListener("change", async (event) => {
   const search = state.lastSearch;
@@ -586,7 +739,94 @@ $("export-json").addEventListener("click", () => {
   download(`${exportStem()}.json`, "application/json", JSON.stringify(report, null, 2));
 });
 
+/* ---------- Недавние запросы ---------- */
+
+function remember(search) {
+  state.history = [search, ...state.history.filter((item) => item !== search)].slice(0, 6);
+  renderHistory();
+}
+
+function renderHistory() {
+  $("history-section").hidden = !state.history.length;
+  $("history").innerHTML = state.history.map((item, index) => {
+    const view = VERDICTS[item.data.verdict] || VERDICTS["совпадений нет"];
+    const top = item.data.candidates[0];
+    const time = item.at.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    return `
+      <button type="button" class="history__item ${item === state.lastSearch ? "history__item--active" : ""}"
+          data-history="${index}" title="${escapeHtml(item.fileName || "")}">
+        <img class="history__image" src="${item.cropUrl}" alt="">
+        <span class="history__text">
+          <span class="history__verdict history__verdict--${view.css}">${view.title}</span>
+          <span class="history__meta">${time}${top ? ` · ${escapeHtml(top.vehicle_id || "без ID")} ${top.score.toFixed(2)}` : ""}</span>
+        </span>
+      </button>`;
+  }).join("");
+}
+
+// Возврат к прошлому запросу: кадр, рамка, результат и схема — как были.
+$("history").addEventListener("click", (event) => {
+  const target = event.target.closest("[data-history]");
+  if (!target) return;
+  const item = state.history[Number(target.dataset.history)];
+  const image = $("frame-image");
+  image.onload = () => {
+    Object.assign(state, { dataUrl: item.frame.dataUrl, width: item.frame.width,
+                           height: item.frame.height, fileName: item.fileName });
+    $("drop-empty").hidden = true;
+    $("frame").hidden = false;
+    $("query-tools").hidden = false;
+    $("drop").classList.add("drop--loaded");
+    setBBox(item.request.bbox || null);
+    $("btn-search").disabled = false;
+    $("btn-register").disabled = false;
+    state.lastSearch = item;
+    state.explainCache.clear();
+    renderSearch(item.data);
+    renderHistory();
+    scene?.setQuery(true);
+    scene?.showResults(item.data.candidates, item.data.threshold, resultCaption(item.data));
+  };
+  image.src = item.frame.dataUrl;
+});
+
+/* ---------- Обзор галереи ---------- */
+
+async function loadGallery() {
+  try {
+    const data = await call("GET", "/api/gallery?limit=60");
+    const vehicles = data.vehicles || [];
+    $("gallery-count").textContent = `${vehicles.length} ${plural(vehicles.length, "машина", "машины", "машин")} · `
+      + `${data.size} ${plural(data.size, "снимок", "снимка", "снимков")}`;
+    $("gallery-grid").innerHTML = vehicles.length ? vehicles.map((v) => `
+      <button type="button" class="gallery-card" data-vehicle="${escapeHtml(v.vehicle_id)}"
+          title="Добавлять новые кадры к ${escapeHtml(v.vehicle_id)}">
+        ${v.thumbnail ? `<img class="gallery-card__image" src="${v.thumbnail}" alt="">`
+                      : '<span class="gallery-card__image"></span>'}
+        <span class="gallery-card__id">${escapeHtml(v.vehicle_id)}</span>
+        <span class="gallery-card__count">${v.shots}</span>
+      </button>`).join("")
+      : '<p class="section-hint">Пока пусто. Загрузите снимки пачкой: ID машины берётся из имени файла.</p>';
+  } catch (error) {
+    $("gallery-grid").innerHTML = `<p class="section-hint">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+$("gallery-grid").addEventListener("click", (event) => {
+  const card = event.target.closest("[data-vehicle]");
+  if (!card) return;
+  $("vehicle").value = card.dataset.vehicle;
+  $("vehicle").focus();
+  toast(state.dataUrl ? `Текущий кадр будет добавлен к ${card.dataset.vehicle} — нажмите «Добавить»`
+                      : `Загрузите кадр, и его можно будет добавить к ${card.dataset.vehicle}`);
+});
+
 /* ---------- Прочее ---------- */
+
+// Порог показываем как есть (0.4925), а не округлённым до 0.492.
+function formatThreshold(value) {
+  return String(Number(value.toFixed(4)));
+}
 
 function escapeHtml(value) {
   const div = document.createElement("div");
@@ -595,4 +835,5 @@ function escapeHtml(value) {
 }
 
 refreshStatus();
+loadGallery();
 setInterval(refreshStatus, 15000);

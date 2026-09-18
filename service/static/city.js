@@ -39,6 +39,9 @@
     text: "#dfe6f3",
   };
 
+  // Карточка найденного снимка у камеры: миниатюра и подпись.
+  const CARD = { w: 86, h: 66 };
+
   // Детерминированный генератор: город одинаковый при каждой загрузке.
   function random(seed) {
     return function () {
@@ -66,6 +69,20 @@
       this.results = [];
 
       this.frame = this.frame.bind(this);
+      this.hitboxes = [];
+      this.highlight = null;
+      const hit = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left, y = event.clientY - rect.top;
+        return this.hitboxes.find((b) => x >= b.left && x <= b.right && y >= b.top && y <= b.bottom);
+      };
+      canvas.addEventListener("click", (event) => {
+        const box = hit(event);
+        if (box && this.onPick) this.onPick(box.index);
+      });
+      canvas.addEventListener("mousemove", (event) => {
+        canvas.style.cursor = hit(event) ? "pointer" : "";
+      });
       new ResizeObserver(() => this.resize()).observe(canvas);
       new IntersectionObserver((entries) => {
         this.visible = entries[0].isIntersecting;
@@ -98,15 +115,31 @@
       this.safeRight = right;
     }
 
-    /* Карточка снимка у камеры: прямоугольник над ней (см. drawResults). */
-    inView(u, v) {
+    /* Где поместится карточка снимка у камеры: над ней, под ней или нигде.
+     * Нельзя закрывать панели, края холста и подпись внизу по центру. */
+    placement(u, v) {
       const [x, y] = this.project(u, v);
-      const card = { left: x - 50, right: x + 50, top: y - 108, bottom: y + 4 };
-      if (card.left < 8 || card.right > this.width - 8 || card.top < 8 || card.bottom > this.height - 48) {
-        return false;
-      }
-      return !(this.obstacles || []).some((r) =>
-        card.left < r.right && card.right > r.left && card.top < r.bottom && card.bottom > r.top);
+      const ticker = { left: this.width / 2 - 330, right: this.width / 2 + 330, top: this.height - 44 };
+      const fits = (top) => {
+        const card = { left: x - CARD.w / 2, right: x + CARD.w / 2, top, bottom: top + CARD.h };
+        if (card.left < 6 || card.right > this.width - 6 || card.top < 6 || card.bottom > this.height - 6) {
+          return false;
+        }
+        if (card.bottom > ticker.top && card.right > ticker.left && card.left < ticker.right) return false;
+        return !(this.obstacles || []).some((r) =>
+          card.left < r.right && card.right > r.left && card.top < r.bottom && card.bottom > r.top);
+      };
+      if (fits(y - CARD.h - 16)) return "above";
+      if (fits(y + 12)) return "below";
+      return null;
+    }
+
+    inView(u, v) { return this.placement(u, v) !== null; }
+
+    /* Подсветка снимка кандидата при наведении на него в списке. */
+    setHighlight(index) {
+      this.highlight = index;
+      if (this.reducedMotion) this.draw();
     }
 
     /* Цель переносится на перекрёсток в центре видимой части карты. */
@@ -163,8 +196,11 @@
       this.results = candidates.slice(0, Math.min(6, cameras.length)).map((candidate, index) => {
         const image = new Image();
         if (candidate.thumbnail) image.src = candidate.thumbnail;
+        const camera = cameras[index % cameras.length];
         return {
-          camera: cameras[index % cameras.length],
+          camera,
+          index,
+          placement: this.placement(camera.u, camera.v) || "above",
           image,
           label: (candidate.vehicle_id || "без ID") + " · " + candidate.score.toFixed(2),
           over: threshold !== null && candidate.score >= threshold,
@@ -261,7 +297,7 @@
       const nodes = [];
       this.xs.forEach((u, i) => this.ys.forEach((v, j) => nodes.push({ i, j, u, v })));
       const central = nodes.filter((n) => Math.hypot(n.u, n.v) < reach * 0.55);
-      const picked = central.sort(() => rand() - 0.5).slice(0, 11);
+      const picked = central.sort(() => rand() - 0.5).slice(0, 16);
       this.cameras = picked.map((n, index) => {
         const heading = [0, Math.PI / 2, Math.PI, -Math.PI / 2][Math.floor(rand() * 4)];
         return { id: index + 1, u: n.u + 13, v: n.v - 13, heading,
@@ -433,35 +469,40 @@
       g.stroke();
       g.setLineDash([]);
 
-      g.font = "700 11px Manrope, 'Segoe UI', sans-serif";
+      g.font = "700 10px Manrope, 'Segoe UI', sans-serif";
+      this.hitboxes = [];
       for (const r of shown) {
         const [x, y] = this.project(r.camera.u, r.camera.v);
         const grow = Math.min(1, (this.time - r.born) * 4);
-        const w = 92, h = 64;
-        const left = x - w / 2, top = y - h - 40;
+        const left = x - CARD.w / 2;
+        const top = r.placement === "below" ? y + 12 : y - CARD.h - 16;
+        const lit = this.highlight === r.index;
         g.globalAlpha = grow;
-        g.fillStyle = "rgba(10, 14, 22, 0.92)";
-        g.strokeStyle = r.over ? "rgba(52, 201, 139, 0.9)" : "rgba(223, 230, 243, 0.35)";
-        g.lineWidth = r.over ? 1.6 : 1;
+        g.fillStyle = "rgba(10, 14, 22, 0.94)";
+        g.strokeStyle = lit ? "#7cc4ff" : r.over ? "rgba(52, 201, 139, 0.9)" : "rgba(223, 230, 243, 0.35)";
+        g.lineWidth = lit ? 2.4 : r.over ? 1.6 : 1;
+        if (lit) { g.shadowColor = "#7cc4ff"; g.shadowBlur = 16; }
         g.beginPath();
-        g.roundRect(left, top, w, h + 18, 8);
+        g.roundRect(left, top, CARD.w, CARD.h, 7);
         g.fill();
         g.stroke();
+        g.shadowBlur = 0;
         if (r.image.complete && r.image.naturalWidth) {
           g.save();
           g.beginPath();
-          g.roundRect(left + 4, top + 4, w - 8, h - 8, 5);
+          g.roundRect(left + 3, top + 3, CARD.w - 6, CARD.h - 20, 5);
           g.clip();
-          g.drawImage(r.image, left + 4, top + 4, w - 8, h - 8);
+          g.drawImage(r.image, left + 3, top + 3, CARD.w - 6, CARD.h - 20);
           g.restore();
         }
         g.fillStyle = r.over ? "#34c98b" : "#a3aab8";
-        g.fillText(r.label, left + 6, top + h + 11, w - 12);
+        g.fillText(r.label, left + 5, top + CARD.h - 6, CARD.w - 10);
         g.beginPath();
-        g.moveTo(x, top + h + 18);
-        g.lineTo(x, y - 8);
+        g.moveTo(x, r.placement === "below" ? top : top + CARD.h);
+        g.lineTo(x, r.placement === "below" ? y + 2 : y - 8);
         g.stroke();
         g.globalAlpha = 1;
+        this.hitboxes.push({ left, top, right: left + CARD.w, bottom: top + CARD.h, index: r.index });
       }
     }
 

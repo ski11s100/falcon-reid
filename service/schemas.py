@@ -197,5 +197,7 @@ class HealthResponse(BaseModel):
     device: str
     gallery_size: int
     threshold_calibrated: bool
+    threshold: float | None = Field(default=None, description="Порог отказа, если задан")
+    model_summary: str = Field(default="", description="Состав моделей для человека")
     storage: str
     search: str = Field(description="Режим поиска: hnsw или exact")

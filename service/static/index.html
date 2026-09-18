@@ -47,6 +47,8 @@
 
   <main class="workspace">
 
+    <div class="stack">
+
     <!-- Запрос: кадр с камеры и рамка машины. -->
     <section class="panel panel--query" aria-label="Запрос">
       <div class="drop" id="drop" tabindex="0">
@@ -89,6 +91,26 @@
       </div>
     </section>
 
+    <!-- Недавние запросы этого сеанса: вернуться к результату одним щелчком. -->
+    <section class="panel panel--compact" id="history-section" aria-labelledby="history-title" hidden>
+      <header class="section-head">
+        <h2 class="section-head__title" id="history-title">Недавние запросы</h2>
+      </header>
+      <div class="history" id="history"></div>
+    </section>
+
+    <!-- Что лежит в галерее: машины, число снимков, свежий снимок. -->
+    <section class="panel panel--compact" aria-labelledby="gallery-title">
+      <header class="section-head">
+        <h2 class="section-head__title" id="gallery-title">Галерея</h2>
+        <span class="section-head__meta" id="gallery-count"></span>
+      </header>
+      <div class="gallery-grid" id="gallery-grid"></div>
+      <p class="section-hint">Щелчок по машине подставит её ID для добавления нового кадра.</p>
+    </section>
+
+    </div>
+
     <!-- Результат поиска. До первого запроса — короткая подсказка. -->
     <section class="panel panel--result" id="result-panel" aria-label="Результат">
       <div class="result-empty" id="result-empty">
@@ -98,11 +120,18 @@
       <div id="result-body" hidden>
       <div class="result-head">
         <div class="verdict" id="verdict"></div>
-        <div class="export">
-          <button type="button" class="chip-button" id="export-csv">CSV</button>
-          <button type="button" class="chip-button" id="export-json">JSON</button>
+        <div class="result-tools">
+          <div class="segmented" role="group" aria-label="Вид результата">
+            <button type="button" class="segmented__option" data-view="vehicles" aria-pressed="true">По машинам</button>
+            <button type="button" class="segmented__option" data-view="shots" aria-pressed="false">Все снимки</button>
+          </div>
+          <div class="export">
+            <button type="button" class="chip-button" id="export-csv">CSV</button>
+            <button type="button" class="chip-button" id="export-json">JSON</button>
+          </div>
         </div>
       </div>
+      <div class="confidence" id="confidence"></div>
       <p class="result-meta" id="result-meta"></p>
       <ol class="candidates" id="candidates"></ol>
       <ul class="warnings" id="warnings"></ul>
@@ -115,8 +144,17 @@
 
 <dialog class="dialog" id="compare" aria-labelledby="compare-title">
   <form method="dialog" class="dialog__close-form"><button class="dialog__close" aria-label="Закрыть">×</button></form>
-  <h2 class="dialog__title" id="compare-title">Сравнение</h2>
-  <p class="dialog__meta" id="compare-meta"></p>
+  <div class="dialog__head">
+    <div>
+      <h2 class="dialog__title" id="compare-title">Сравнение</h2>
+      <p class="dialog__meta" id="compare-meta"></p>
+    </div>
+    <div class="stepper" aria-label="Листать кандидатов">
+      <button type="button" class="stepper__button" id="compare-prev" aria-label="Предыдущий кандидат">←</button>
+      <span class="stepper__count" id="compare-counter">1 из 10</span>
+      <button type="button" class="stepper__button" id="compare-next" aria-label="Следующий кандидат">→</button>
+    </div>
+  </div>
   <div class="compare">
     <figure>
       <div class="compare__image"><img id="compare-query" alt="Запрос"></div>
@@ -128,6 +166,7 @@
     </figure>
   </div>
   <p class="dialog__note" id="compare-explain"></p>
+  <p class="dialog__keys">← → — соседний кандидат · H — карта внимания · Esc — закрыть</p>
 </dialog>
 
 <dialog class="dialog dialog--narrow" id="key-dialog" aria-labelledby="key-title">

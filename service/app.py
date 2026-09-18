@@ -29,7 +29,7 @@ from PIL import Image, ImageOps
 
 from falcon.explain import GradCAM, overlay_heatmap, plate_attention, plate_masking_boxes
 from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
-from falcon.model import VehicleReID
+from falcon.model import VehicleReID, ViTReID
 
 from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
@@ -81,6 +81,7 @@ class ServiceState:
     extractor: FeatureExtractor | None = None
     repository: VectorRepository | None = None
     model_name: str = "не загружена"
+    model_summary: str = ""
     storage_name: str = "не подключено"
 
 
@@ -116,8 +117,9 @@ async def lifespan(app: FastAPI):
                             half=settings.half, flip_tta=settings.flip_tta),
         )
         names = " + ".join(p.name for p in paths)
-        state.model_name = (f"{VehicleReID.ARCHITECTURE} "
+        state.model_name = (f"{state.extractor.metadata.get('architecture', 'falcon')} "
                             f"({'ансамбль: ' if len(paths) > 1 else ''}{names})")
+        state.model_summary = summarise_models(state.extractor)
         # Прогрев: подбор алгоритмов cuDNN оплачивается при старте, а не
         # первым запросом оператора (или жюри).
         warmup = Image.new("RGB", (320, 240), (128, 128, 128))
@@ -156,6 +158,18 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # Ключ API (если задан FALCON_API_KEY) нужен всем методам, кроме /api/health.
 protected = [Depends(require_api_key)]
+
+
+MODEL_TITLES = {VehicleReID.ARCHITECTURE: "ResNet50-IBN", ViTReID.ARCHITECTURE: "CLIP ViT-B/16"}
+
+
+def summarise_models(extractor) -> str:
+    """«2 × ResNet50-IBN» или «ResNet50-IBN + CLIP ViT-B/16» — для строки состояния."""
+    members = getattr(extractor, "members", None) or [extractor]
+    titles = [MODEL_TITLES.get(m.model.ARCHITECTURE, m.model.ARCHITECTURE) for m in members]
+    if len(titles) > 1 and len(set(titles)) == 1:
+        return f"{len(titles)} × {titles[0]}"
+    return " + ".join(titles)
 
 
 def require_model() -> FeatureExtractor:
@@ -301,6 +315,8 @@ def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
         device=state.extractor.device.type if state.extractor else "нет",
         gallery_size=repository.count() if repository else 0,
         threshold_calibrated=settings.match_threshold is not None,
+        threshold=settings.match_threshold,
+        model_summary=state.model_summary,
         storage=state.storage_name,
         search=getattr(repository, "ann_index", "exact") if repository else "нет",
     )
@@ -371,7 +387,7 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
         accepted=accepted,
         verdict="совпадение" if accepted else "совпадений нет",
         refusal_reason=None if accepted else
-            f"Лучший кандидат {candidates[0].score:.3f} ниже порога {threshold:.3f}",
+            f"Лучший кандидат {candidates[0].score:.3f} ниже порога {threshold:g}",
         threshold=threshold,
         matches=[c for c in candidates if c.score >= threshold] if accepted else [],
         candidates=candidates, quality=quality, elapsed_ms=elapsed,
@@ -470,7 +486,10 @@ def explain_parts(extractor, reference: np.ndarray) -> list[tuple]:
         return [(extractor.explain_model, reference)]
     parts, offset = [], 0
     for member in members:
-        parts.append((member.explain_model, reference[offset:offset + member.feature_dim]))
+        # Grad-CAM строится по свёрточной карте признаков: у ViT её нет, и такой
+        # участник ансамбля в карту внимания не входит.
+        if isinstance(member.model, VehicleReID):
+            parts.append((member.explain_model, reference[offset:offset + member.feature_dim]))
         offset += member.feature_dim
     return parts
 
@@ -533,7 +552,11 @@ def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
           dependencies=protected)
 def list_gallery(limit: int = 100,
                  repository: VectorRepository = Depends(require_repository)) -> dict:
-    return {"size": repository.count(), "vehicles": repository.list_vehicles(limit)}
+    """Машины в галерее: число снимков и миниатюра самого свежего."""
+    vehicles = repository.list_vehicles(max(1, min(limit, 500)))
+    for vehicle in vehicles:
+        vehicle["thumbnail"] = as_data_url(vehicle.get("thumbnail"))
+    return {"size": repository.count(), "vehicles": vehicles}
 
 
 @app.delete("/api/gallery/{image_id}", tags=["Галерея"], summary="Удалить наблюдение",

@@ -75,14 +75,32 @@ class TestExplainParts(unittest.TestCase):
     def test_ensemble_reference_is_split_by_member(self):
         import numpy as np
         from types import SimpleNamespace
+        from falcon.model import VehicleReID
         from service.app import explain_parts
-        members = [SimpleNamespace(explain_model="A", feature_dim=3),
-                   SimpleNamespace(explain_model="B", feature_dim=2)]
+        # Настоящие модели не нужны: explain_parts смотрит только на их тип.
+        resnet = VehicleReID.__new__(VehicleReID)
+        members = [SimpleNamespace(model=resnet, explain_model="A", feature_dim=3),
+                   SimpleNamespace(model=resnet, explain_model="B", feature_dim=2)]
         reference = np.arange(5, dtype=np.float32)
         parts = explain_parts(SimpleNamespace(members=members), reference)
         self.assertEqual([m for m, _ in parts], ["A", "B"])
         self.assertEqual(parts[0][1].tolist(), [0, 1, 2])
         self.assertEqual(parts[1][1].tolist(), [3, 4])
+
+    def test_vit_member_is_skipped_but_keeps_offset(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from falcon.model import VehicleReID, ViTReID
+        from service.app import explain_parts
+        # У ViT нет свёрточной карты признаков: Grad-CAM строится по ResNet,
+        # но смещение в склеенном векторе учитывает и часть ViT.
+        members = [SimpleNamespace(model=ViTReID.__new__(ViTReID), explain_model="V", feature_dim=2),
+                   SimpleNamespace(model=VehicleReID.__new__(VehicleReID), explain_model="R",
+                                   feature_dim=3)]
+        reference = np.arange(5, dtype=np.float32)
+        parts = explain_parts(SimpleNamespace(members=members), reference)
+        self.assertEqual([m for m, _ in parts], ["R"])
+        self.assertEqual(parts[0][1].tolist(), [2, 3, 4])
 
     def test_single_model_gets_whole_vector(self):
         import numpy as np
