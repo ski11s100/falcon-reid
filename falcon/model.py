@@ -307,3 +307,103 @@ def build_model(num_classes: int = 0, embedding_dim: int = 2048, pretrained: boo
     if pretrained:
         load_pretrained_backbone(model, weights_path, verbose=verbose)
     return model
+
+
+# ---------------------------------------------------------------------------
+# CLIP ViT-B/16: вторая архитектура ансамбля
+# ---------------------------------------------------------------------------
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
+CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+
+
+class ViTReID(nn.Module):
+    """Image-энкодер CLIP ViT-B/16 -> BNNeck -> (признак, логиты).
+
+    Зачем вторая архитектура. Наши ResNet50 предобучены на ImageNet (1.3 млн
+    картинок), а CLIP — на 400 млн пар «картинка — текст». Проба без
+    дообучения на отложенной выборке: mAP@10 0.110 у CLIP против 0.061 у
+    ResNet50-IBN и 0.055–0.064 у DINOv2. На этом же наблюдении построен
+    CLIP-ReID — один из сильнейших методов поиска машин. Вдобавок модель другой
+    архитектуры ошибается иначе, и в ансамбле это ценнее ещё одной ResNet.
+
+    Интерфейс тот же, что у VehicleReID: на обучении — (признак до BN, логиты),
+    на инференсе — L2-нормированный признак после BNNeck. Препроцессинг у всех
+    участников ансамбля общий (256x256, нормализация ImageNet), поэтому
+    модель сама переводит вход в нормализацию CLIP — точно и почти бесплатно.
+    """
+
+    ARCHITECTURE = "clip-vit-b16-bnneck-v1"
+    BACKBONE = "vit_base_patch16_clip_224.openai"
+
+    def __init__(self, num_classes: int = 0, img_size: int = 256, pretrained: bool = False):
+        super().__init__()
+        import timm  # только для этой архитектуры; ResNet без timm работает
+
+        # pretrained=False не ходит в сеть: архитектура описана в коде timm,
+        # веса приходят из нашего чекпоинта. Сеть нужна только при старте
+        # обучения с весов CLIP.
+        self.backbone = timm.create_model(self.BACKBONE, pretrained=pretrained,
+                                          num_classes=0, img_size=img_size)
+        feature_dim = self.backbone.num_features
+        self.feature_dim = feature_dim
+
+        scale = torch.tensor(IMAGENET_STD) / torch.tensor(CLIP_STD)
+        shift = (torch.tensor(IMAGENET_MEAN) - torch.tensor(CLIP_MEAN)) / torch.tensor(CLIP_STD)
+        self.register_buffer("input_scale", scale.view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("input_shift", shift.view(1, 3, 1, 1), persistent=False)
+
+        self.bottleneck = nn.BatchNorm1d(feature_dim)
+        self.bottleneck.bias.requires_grad_(False)
+        self.bottleneck.apply(weights_init_kaiming)
+
+        self.num_classes = num_classes
+        if num_classes > 0:
+            self.classifier = nn.Linear(feature_dim, num_classes, bias=False)
+            nn.init.normal_(self.classifier.weight, std=0.001)
+        else:
+            self.classifier = None
+
+    def forward(self, images: torch.Tensor):
+        images = images * self.input_scale + self.input_shift
+        triplet_feature = self.backbone(images)            # CLS-токен после LayerNorm
+        inference_feature = self.bottleneck(triplet_feature)
+        if not self.training or self.classifier is None:
+            return F.normalize(inference_feature, dim=1)
+        return triplet_feature, self.classifier(inference_feature)
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        self.backbone.set_grad_checkpointing(enabled)
+
+    def head_parameters(self):
+        """Параметры поверх энкодера: им нужна скорость обучения выше."""
+        yield from self.bottleneck.parameters()
+        if self.classifier is not None:
+            yield from self.classifier.parameters()
+
+
+ARCHITECTURES = {
+    VehicleReID.ARCHITECTURE: "resnet50-ibn",
+    ViTReID.ARCHITECTURE: "clip-vit-b16",
+}
+
+
+def build_named(name: str, num_classes: int = 0, pretrained: bool = True,
+                embedding_dim: int = 2048, verbose: bool = True) -> nn.Module:
+    """Модель по короткому имени архитектуры: resnet50-ibn | clip-vit-b16."""
+    if name == "clip-vit-b16":
+        return ViTReID(num_classes=num_classes, pretrained=pretrained)
+    if name == "resnet50-ibn":
+        return build_model(num_classes=num_classes, embedding_dim=embedding_dim,
+                           pretrained=pretrained, verbose=verbose)
+    raise ValueError(f"Неизвестная архитектура {name!r}")
+
+
+def build_for_checkpoint(architecture: str, num_classes: int, feature_dim: int) -> nn.Module:
+    """Пустая модель под чекпоинт: без загрузки предобученных весов и без сети."""
+    if architecture not in ARCHITECTURES:
+        raise ValueError(f"Чекпоинт собран неизвестной архитектурой: {architecture!r}")
+    return build_named(ARCHITECTURES[architecture], num_classes=num_classes,
+                       pretrained=False, embedding_dim=feature_dim, verbose=False)

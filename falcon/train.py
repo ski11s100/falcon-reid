@@ -45,7 +45,7 @@ from falcon.extract import (  # noqa: E402
 )
 from falcon.losses import ReIDCriterion  # noqa: E402
 from falcon.metrics import Identity, evaluate_ranking, rank_from_embeddings  # noqa: E402
-from falcon.model import build_model  # noqa: E402
+from falcon.model import build_named  # noqa: E402
 from falcon.transforms import DEFAULT_SIZE, build_train_transform  # noqa: E402
 
 
@@ -80,6 +80,12 @@ class TrainConfig:
     # На 6 ГБ видеопамяти окупается всегда: батч 64 иначе уходит в
     # вытеснение и замедляется восьмикратно (см. autoconfigure_batch).
     grad_checkpointing: bool = True
+    # resnet50-ibn | clip-vit-b16 (см. falcon/model.py, build_named).
+    architecture: str = "resnet50-ibn"
+    # Своя скорость обучения для предобученного энкодера. Для CLIP она на
+    # порядки ниже, чем для новой головы: большой шаг стирает то, чему энкодер
+    # научился на 400 млн картинок (приём из CLIP-ReID). None — одна на всё.
+    backbone_lr: float | None = None
 
 
 def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
@@ -323,8 +329,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
 
     # Без resume backbone инициализируется весами ImageNet+IBN. С resume поверх
     # них ложится предобучение на стороннем наборе — ImageNet скачивать не нужно.
-    model = build_model(num_classes=len(labels), embedding_dim=config.embedding_dim,
-                        pretrained=resume is None)
+    model = build_named(config.architecture, num_classes=len(labels),
+                        pretrained=resume is None, embedding_dim=config.embedding_dim)
     if resume is not None:
         load_transferred_weights(model, resume)
     model.set_gradient_checkpointing(config.grad_checkpointing)
@@ -336,7 +342,14 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
         center_weight=config.center_weight, label_smoothing=config.label_smoothing,
     ).to(device)
 
-    parameters = [{"params": model.parameters()}]
+    if config.backbone_lr is not None:
+        backbone = list(model.backbone.parameters())
+        backbone_ids = {id(p) for p in backbone}
+        head = [p for p in model.parameters() if id(p) not in backbone_ids]
+        parameters = [{"params": backbone, "lr": config.backbone_lr},
+                      {"params": head}]
+    else:
+        parameters = [{"params": model.parameters()}]
     if criterion.center is not None:
         # У center loss своя, сильно большая скорость обучения — это из статьи.
         parameters.append({"params": criterion.center.parameters(), "lr": 0.5, "weight_decay": 0.0})
@@ -497,6 +510,12 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=2,
                         help="Валидировать каждые N эпох")
     parser.add_argument("--no-checkpointing", action="store_true")
+    parser.add_argument("--architecture", default="resnet50-ibn",
+                        choices=["resnet50-ibn", "clip-vit-b16"])
+    parser.add_argument("--backbone-lr", type=float, default=None,
+                        help="Скорость обучения энкодера; без флага — общая --lr")
+    parser.add_argument("--weight-decay", type=float, default=5e-4)
+    parser.add_argument("--warmup-epochs", type=int, default=10)
     args = parser.parse_args()
 
     config = TrainConfig(
@@ -510,6 +529,10 @@ def main() -> None:
         split_seed=args.split_seed,
         eval_every=args.eval_every,
         grad_checkpointing=not args.no_checkpointing,
+        architecture=args.architecture,
+        backbone_lr=args.backbone_lr,
+        weight_decay=args.weight_decay,
+        warmup_epochs=args.warmup_epochs,
     )
     result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
                    csv_path=args.csv, images_dir=args.images)

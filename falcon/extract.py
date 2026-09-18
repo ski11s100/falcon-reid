@@ -27,7 +27,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from .data import Observation, load_crop
-from .model import VehicleReID, build_model
+from .model import VehicleReID, build_for_checkpoint
 from .transforms import DEFAULT_SIZE, build_eval_transform
 
 
@@ -309,9 +309,8 @@ class FeatureExtractor:
         if self._fp32_state is None:
             return self.model
         if self._explain_model is None:
-            model = build_model(num_classes=self.model.num_classes,
-                                embedding_dim=self.model.feature_dim,
-                                pretrained=False, verbose=False)
+            model = build_for_checkpoint(self.model.ARCHITECTURE, self.model.num_classes,
+                                         self.model.feature_dim)
             model.load_state_dict(self._fp32_state, strict=True)
             self._explain_model = model.eval().to(self.device)
         return self._explain_model
@@ -437,7 +436,7 @@ class EnsembleExtractor:
         self.transform = first.transform
         self.feature_dim = sum(m.feature_dim for m in self.members)
         self.metadata = {
-            "architecture": VehicleReID.ARCHITECTURE,
+            "architecture": " + ".join(m.model.ARCHITECTURE for m in self.members),
             "ensemble": [str(c) for c in checkpoints],
             "weights": self.weights,
         }
@@ -515,7 +514,7 @@ def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
-        "architecture": VehicleReID.ARCHITECTURE,
+        "architecture": model.ARCHITECTURE,
         "model": model.state_dict(),
         "num_classes": model.num_classes,
         "feature_dim": model.feature_dim,
@@ -563,13 +562,8 @@ def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
     # pickle (weights_only=False) выполнил бы код из подложенного файла весов,
     # то есть файл весов был бы готовым вектором атаки на сервер.
     state = torch.load(path, map_location="cpu", weights_only=True)
-    if state.get("architecture") != VehicleReID.ARCHITECTURE:
-        raise ValueError(
-            f"Чекпоинт собран другой архитектурой: {state.get('architecture')!r}, "
-            f"ожидается {VehicleReID.ARCHITECTURE!r}"
-        )
-    model = build_model(num_classes=state.get("num_classes", 0),
-                        embedding_dim=state.get("feature_dim", 2048),
-                        pretrained=False, verbose=False)
+    # Архитектура записана в чекпоинт; неизвестная — ошибка с понятным текстом.
+    model = build_for_checkpoint(state.get("architecture"), state.get("num_classes", 0),
+                                 state.get("feature_dim", 2048))
     model.load_state_dict(state["model"], strict=True)
     return model, {**state.get("metadata", {}), "preprocessing": state.get("preprocessing")}
