@@ -37,19 +37,22 @@ from .rerank import build_gallery_index, rerank_query
 class SubmissionConfig:
     """Параметры сдачи.
 
-    use_rerank выключен по умолчанию намеренно. k-reciprocal даёт прирост только
-    на достаточно большой галерее: окрестность должна покрывать малую её долю.
-    На синтетическом прогоне (галерея 46 объектов) метод стабильно ухудшал mAP.
-    Включать строго после A/B-проверки на локальном сплите реальных данных —
-    scripts/tune_rerank.py подбирает k1/k2/lambda и сам говорит, стоит ли.
+    use_rerank выключен намеренно. На реалистичном локальном сплите лучшая
+    конфигурация (k1=12, lambda=0.7) дала +0.0057 mAP@10, но парный бутстрэп по
+    запросам даёт 95% интервал [-0.010; +0.022]: прирост неотличим от шума, а
+    на предыдущем сплите та же конфигурация теряла 4.7%. Выигрыш сомнителен,
+    потеря возможна — в сдаче метод не используется.
+
+    Параметры по умолчанию — лучшие из проверенных, на случай ручного включения:
+    прежние (k1=20, lambda=0.3) были худшими в сетке, mAP 0.487.
     """
 
     threshold: float | None = None
     use_rerank: bool = False
     rerank_pool: int = 100
-    k1: int = 20
+    k1: int = 12
     k2: int = 6
-    lambda_value: float = 0.3
+    lambda_value: float = 0.7
     candidates_per_query: int = 1
 
 
@@ -164,7 +167,8 @@ def write_submission(
             "k1": config.k1, "k2": config.k2, "lambda": config.lambda_value,
             "pool": config.rerank_pool,
         },
-        "confidence_definition": "оценка близости после переранжирования, не калиброванная вероятность",
+        "confidence_definition": ("косинусное сходство эмбеддингов, не калиброванная вероятность; "
+                                  "переранжирование, если включено, меняет только порядок"),
         "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
         "checksums": {
             name: hashlib.sha256((output_dir / name).read_bytes()).hexdigest()

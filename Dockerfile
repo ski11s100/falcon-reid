@@ -37,13 +37,14 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /opt/falcon
 
-# Зависимости ставятся до копирования кода: слой кешируется и не пересобирается
-# при каждом изменении исходников.
-COPY requirements.txt .
+# Зависимости ставятся до копирования кода: слои кешируются и не пересобираются
+# при каждом изменении исходников. PyTorch (2.5 ГБ) — отдельным слоем: правка
+# requirements.txt не должна заставлять качать его заново.
 RUN pip install --upgrade pip \
     && pip install torch==2.14.0 torchvision==0.29.0 \
-         --index-url https://download.pytorch.org/whl/cu126 \
-    && pip install -r requirements.txt
+         --index-url https://download.pytorch.org/whl/cu126
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
 COPY falcon ./falcon
 COPY service ./service
@@ -53,13 +54,22 @@ COPY scripts ./scripts
 # 2 ГБ (раздел 7 ТЗ), две ResNet50-IBN-a занимают 199 МБ.
 COPY models ./models
 
-ENV FALCON_CHECKPOINT=/opt/falcon/models/model-b.pt \
+# По умолчанию — тот же ансамбль и порог, что в сдаче и в docker-compose:
+# порог откалиброван под этот состав моделей и на одну модель не переносится.
+ENV FALCON_CHECKPOINTS=/opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt \
+    FALCON_MATCH_THRESHOLD=0.411 \
     FALCON_DEVICE=cuda \
     FALCON_HOST=0.0.0.0 \
     FALCON_PORT=8000 \
     FALCON_SQLITE_PATH=/opt/falcon/data/falcon.sqlite3
 
-RUN mkdir -p /opt/falcon/data
+# Непривилегированный пользователь для сервиса. docker-compose запускает api
+# от него (user: 10001) с файловой системой только для чтения. Образ по
+# умолчанию остаётся от root ради пакетной генерации сдачи: она пишет в
+# каталог хоста, смонтированный в /data, а его владельца мы не знаем.
+RUN useradd --system --uid 10001 --home-dir /tmp --shell /usr/sbin/nologin falcon \
+    && mkdir -p /opt/falcon/data \
+    && chown -R 10001:10001 /opt/falcon/data
 
 EXPOSE 8000
 
@@ -70,6 +80,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 # сдачи — отдельная команда, переопределяющая CMD:
 #
 #   docker run --rm --gpus all -v /путь/к/данным:/data falcon-api \
-#       python scripts/run_submission.py /data --output /data/submission \
-#       --checkpoints models/model-a.pt models/model-b.pt --threshold 0.411
+#       python scripts/run_submission.py /data --output /data/submission --threshold 0.411
 CMD ["python", "-m", "uvicorn", "service.app:app", "--host", "0.0.0.0", "--port", "8000"]

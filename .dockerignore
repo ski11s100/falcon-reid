@@ -29,3 +29,6 @@ tests/
 README.md
 STATUS.md
 TEAM_TASKS.md
+
+# Временные файлы проверки интерфейса
+service/static/_*

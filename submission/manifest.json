@@ -1,0 +1,27 @@
+{
+  "format": "falcon-submission-v1",
+  "model": "resnet50-ibn-a-bnneck-gem-v1",
+  "queries": 1110,
+  "gallery": 750,
+  "embedding_dim": 4096,
+  "embeddings_dtype": "float32",
+  "threshold": 0.411,
+  "accepted_queries": 1050,
+  "refused_queries": 60,
+  "refusal_rate": 0.0541,
+  "reranking": {
+    "enabled": false,
+    "method": "k-reciprocal, потоково-совместимый (без связей query-query)",
+    "k1": 12,
+    "k2": 6,
+    "lambda": 0.7,
+    "pool": 100
+  },
+  "confidence_definition": "косинусное сходство эмбеддингов, не калиброванная вероятность; переранжирование, если включено, меняет только порядок",
+  "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
+  "checksums": {
+    "submission.csv": "40c29111cbf05951e53afe28fd1149291c990aabfe88893c63eb8d24580a6963",
+    "candidates.csv": "79418361dc0792b2c990fc85fe02366421e8b82505c7e44712cc1d224675c804",
+    "embeddings.npy": "aec2572b90996c2519575482755d8f3d5e93e4ea1752e73a5affe6be2918773c"
+  }
+}

@@ -19,6 +19,8 @@ uvicorn[standard]==0.53.0
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-multipart==0.0.32
+# Swagger UI из локальных файлов: /docs работает без интернета
+swagger-ui-bundle==1.1.0
 
 # Приближённый поиск для демонстрации масштабируемости (docs/SCALABILITY.md)
 faiss-cpu==1.15.1

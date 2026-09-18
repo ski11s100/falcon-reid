@@ -1,19 +1,33 @@
-# Запуск всего решения одной командой: docker compose up
+# Запуск всего решения одной командой: docker compose up --build
+# Интерфейс оператора: http://localhost:8000   Документация API: /docs
 #
-# Раздел 6 ТЗ требует микросервисного разделения ответственности и векторной
-# либо реляционной СУБД, называя PostgreSQL с pgvector в качестве примера.
-# Здесь три роли разведены по контейнерам:
-#   postgres — хранение эмбеддингов галереи и метаданных, индекс HNSW;
-#   api      — инференс ReID-модели и HTTP-контракт с OpenAPI;
-#   клиент   — статика, отдаётся сервисом api, работает в браузере.
+# Раздел 6 ТЗ требует микросервисного разделения ответственности. Три роли —
+# три контейнера:
+#   web      — клиентская часть: интерфейс оператора и обратный прокси (nginx);
+#   api      — инференс ReID-модели и HTTP-контракт с OpenAPI (FastAPI, GPU);
+#   postgres — хранение эмбеддингов галереи и метаданных (pgvector).
+#
+# Безопасность по умолчанию:
+#   * наружу открыт только web; api и postgres доступны лишь внутри сети compose;
+#   * api и web работают не от root, с файловой системой только для чтения
+#     и без дополнительных прав Linux (cap_drop: ALL, no-new-privileges);
+#   * пароль базы и ключ API задаются переменными (см. .env.example). Значение
+#     пароля по умолчанию годится только для локального показа: база наружу
+#     не открыта, но в эксплуатации его нужно заменить.
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
 
 services:
   postgres:
+    <<: *hardening
     # Официальный образ pgvector: расширение уже собрано, ставить нечего.
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: falcon
-      POSTGRES_PASSWORD: falcon
+      POSTGRES_PASSWORD: ${FALCON_DB_PASSWORD:-falcon-local-demo}
       POSTGRES_DB: falcon
     volumes:
       - falcon-db:/var/lib/postgresql/data
@@ -22,9 +36,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   api:
+    <<: *hardening
     build:
       context: .
       dockerfile: Dockerfile
@@ -34,25 +48,32 @@ services:
         # а не просто запуска контейнера.
         condition: service_healthy
     environment:
-      FALCON_DATABASE_DSN: postgresql://falcon:falcon@postgres:5432/falcon
+      FALCON_DATABASE_DSN: postgresql://falcon:${FALCON_DB_PASSWORD:-falcon-local-demo}@postgres:5432/falcon
       # Тот же ансамбль, что идёт в сдачу: порог откалиброван под этот состав
       # моделей и на одиночную модель не переносится.
       FALCON_CHECKPOINTS: /opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt
       FALCON_DEVICE: cuda
-      FALCON_HOST: "0.0.0.0"
-      FALCON_PORT: "8000"
       # Порог отказа, откалиброванный на локальном сплите под этот ансамбль
       # (runs/v5-final/calibration.json). Максимизирует 0.7*F1 + 0.3*TNR.
       FALCON_MATCH_THRESHOLD: "0.411"
+      # Пусто — доступ без ключа (для проверки одной командой).
+      FALCON_API_KEY: ${FALCON_API_KEY:-}
+      HOME: /tmp
+    # Не root. Пакетная генерация сдачи (docker run, см. README) идёт от root
+    # намеренно: ей нужно писать в каталог хоста, владельца которого мы не знаем.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
     # Разделяемая память для загрузчика данных. Решение умеет работать и при
-    # 64 МБ по умолчанию (falcon/extract.py переключает обмен на файловую
-    # систему), но с нормальным объёмом оно чуть быстрее.
+    # 64 МБ по умолчанию (потоковый загрузчик), но с нормальным объёмом быстрее.
     shm_size: "2gb"
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - falcon-data:/opt/falcon/data
-    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -60,6 +81,22 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  web:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8000:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
 
 volumes:
   falcon-db:

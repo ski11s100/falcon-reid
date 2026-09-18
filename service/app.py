@@ -22,7 +22,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
@@ -143,7 +144,11 @@ app = FastAPI(
     description=DESCRIPTION,
     version="5.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
+    # Swagger UI по умолчанию тянет скрипты с CDN, и на стенде без интернета
+    # страница /docs была бы пустой. Здесь она собрана из локальных файлов
+    # пакета swagger-ui-bundle (см. маршрут /docs ниже).
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/openapi.json",
 )
 app.add_middleware(BodySizeLimitMiddleware, limit_for_path=request_body_limit)
@@ -557,6 +562,27 @@ class NoCacheStatic(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
+
+
+try:
+    from swagger_ui_bundle import swagger_ui_path
+
+    app.mount("/docs-assets", StaticFiles(directory=swagger_ui_path), name="docs-assets")
+
+    @app.get("/docs", include_in_schema=False)
+    def docs() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url, title=f"{app.title} — API",
+            swagger_js_url="/docs-assets/swagger-ui-bundle.js",
+            swagger_css_url="/docs-assets/swagger-ui.css",
+            swagger_favicon_url="/docs-assets/favicon-32x32.png",
+        )
+except ImportError:  # пакет не установлен — документация с CDN, как в FastAPI
+    from fastapi.openapi.docs import get_swagger_ui_html as _cdn_docs
+
+    @app.get("/docs", include_in_schema=False)
+    def docs() -> HTMLResponse:
+        return _cdn_docs(openapi_url=app.openapi_url, title=f"{app.title} — API")
 
 
 if STATIC_DIR.is_dir():
