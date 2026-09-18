@@ -53,9 +53,10 @@ services:
       # моделей и на одиночную модель не переносится.
       FALCON_CHECKPOINTS: /opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt
       FALCON_DEVICE: cuda
-      # Порог отказа, откалиброванный на локальном сплите под этот ансамбль
-      # (runs/v5-final/calibration.json). Максимизирует 0.7*F1 + 0.3*TNR.
-      FALCON_MATCH_THRESHOLD: "0.411"
+      # Порог отказа, откалиброванный на локальном сплите под этот ансамбль по
+      # баллу 0.7*F1 + 0.3*TNR эталонного скрипта организаторов
+      # (CALIBRATED_THRESHOLD в falcon/submit.py, проверка — verify_official.py).
+      FALCON_MATCH_THRESHOLD: "0.4925"
       # Пусто — доступ без ключа (для проверки одной командой).
       FALCON_API_KEY: ${FALCON_API_KEY:-}
       HOME: /tmp

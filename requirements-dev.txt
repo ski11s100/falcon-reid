@@ -1,0 +1,7 @@
+# Инструменты разработки и проверки. В образ сервиса не входят.
+#   pip install -r requirements-dev.txt
+
+# Эталонный скрипт организаторов (organizers/evaluate.py) написан на pandas
+pandas==3.0.6
+# Поиск известных уязвимостей в зависимостях: pip-audit -r requirements.txt
+pip-audit==2.10.1

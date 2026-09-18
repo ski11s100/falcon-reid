@@ -149,6 +149,15 @@ class TestRefusalMode(unittest.TestCase):
         self.assertEqual(report.tnr, 1.0)  # отказал везде, но потерял все реальные пары
         self.assertEqual(report.f1, 0.0)
 
+    def test_same_vehicle_same_camera_counts_as_correct(self):
+        # Эталонный скрипт организаторов: верность верхнего кандидата — только
+        # по vehicle_id, камера не проверяется (organizers/evaluate.py).
+        gallery = {**self.gallery, "gA_same_cam": Identity("A", "cam1")}
+        candidates = {"q_hit": [("gA_same_cam", 0.9)]}
+        report = evaluate_refusal(candidates, self.queries, gallery)
+        self.assertEqual(report.tp, 1)
+        self.assertEqual(report.fp, 0)
+
     def test_always_answering_destroys_tnr(self):
         # Сценарий, который организаторы явно хотят наказать: всегда отдаём топ-1.
         candidates = {qid: [("gA", 0.5)] for qid in self.queries}

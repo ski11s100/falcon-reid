@@ -57,7 +57,7 @@ COPY models ./models
 # По умолчанию — тот же ансамбль и порог, что в сдаче и в docker-compose:
 # порог откалиброван под этот состав моделей и на одну модель не переносится.
 ENV FALCON_CHECKPOINTS=/opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt \
-    FALCON_MATCH_THRESHOLD=0.411 \
+    FALCON_MATCH_THRESHOLD=0.4925 \
     FALCON_DEVICE=cuda \
     FALCON_HOST=0.0.0.0 \
     FALCON_PORT=8000 \
@@ -80,5 +80,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
 # сдачи — отдельная команда, переопределяющая CMD:
 #
 #   docker run --rm --gpus all -v /путь/к/данным:/data falcon-api \
-#       python scripts/run_submission.py /data --output /data/submission --threshold 0.411
+#       python scripts/run_submission.py /data --output /data/submission
 CMD ["python", "-m", "uvicorn", "service.app:app", "--host", "0.0.0.0", "--port", "8000"]

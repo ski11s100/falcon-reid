@@ -7,7 +7,11 @@
                    Никакой дополнительной сортировки. L2-нормализация не
                    обязательна, но сдаём нормированные — так честнее и дешевле.
 
-  submission.csv   query_id, gallery_id_1 ... gallery_id_10.
+  submission.csv   query_id, gallery_id_1 ... gallery_id_10, БЕЗ ЗАГОЛОВКА —
+                   так читает эталонный скрипт организаторов
+                   (organizers/evaluate.py: «Формат submission.csv (без
+                   заголовка)»). Заголовок он принял бы за запрос с именем
+                   query_id и выдал предупреждение о десяти неизвестных id.
                    РОВНО десять кандидатов на каждый запрос, БЕЗ ИСКЛЮЧЕНИЙ,
                    включая те, где мы уверены в отказе. Отказ здесь никак не
                    выражается — это файл только про ранжирование.
@@ -31,6 +35,19 @@ import numpy as np
 from .data import Observation
 from .metrics import TOP_K, l2_normalize
 from .rerank import build_gallery_index, rerank_query
+
+
+# Порог отказа ансамбля из сдачи (models/model-a.pt + models/model-b.pt).
+#
+# Подобран на локальном сплите (890 запросов, 20% без пары — как в закрытом
+# тесте) по баллу режима кандидатов 0.7·F1 + 0.3·TNR, посчитанному ЭТАЛОННЫМ
+# скриптом организаторов (organizers/evaluate.py). Берётся не острый пик кривой,
+# а максимум после сглаживания окном ±0.01: TNR считается всего по 182 запросам
+# без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
+#
+# Прежний порог 0.411 выбирался под худшее из двух толкований F1 (засчитывается
+# ли та же машина с той же камеры). Эталонный скрипт снял вопрос: засчитывается.
+CALIBRATED_THRESHOLD = 0.4925
 
 
 @dataclass
@@ -129,7 +146,6 @@ def write_submission(
 
     with (output_dir / "submission.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["query_id"] + [f"gallery_id_{i}" for i in range(1, TOP_K + 1)])
         for i, qid in enumerate(query_ids):
             writer.writerow([qid] + [gallery_ids[j] for j in top_indices[i]])
 
@@ -198,13 +214,12 @@ def validate_submission(output_dir: Path, expected_queries: int, expected_galler
 
     with (output_dir / "submission.csv").open(encoding="utf-8", newline="") as stream:
         reader = csv.reader(stream)
-        header = next(reader)
-        if header != ["query_id"] + [f"gallery_id_{i}" for i in range(1, TOP_K + 1)]:
-            problems.append(f"submission.csv: неверный заголовок {header}")
         submission_ids = set()
         rows = 0
         for row in reader:
             rows += 1
+            if rows == 1 and row and row[0] == "query_id":
+                problems.append("submission.csv: заголовок не нужен, эталонный скрипт читает без него")
             if len(row) != TOP_K + 1:
                 problems.append(f"submission.csv: строка {rows} содержит {len(row)} полей")
             if len(set(row[1:])) != TOP_K:

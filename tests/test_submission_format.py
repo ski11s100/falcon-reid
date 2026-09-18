@@ -60,8 +60,10 @@ class TestSubmissionFiles(unittest.TestCase):
 
             with (Path(directory) / "submission.csv").open(encoding="utf-8", newline="") as stream:
                 rows = list(csv.reader(stream))
-            self.assertEqual(len(rows) - 1, len(self.queries))
-            for row in rows[1:]:
+            # Без заголовка: так читает эталонный скрипт организаторов.
+            self.assertEqual(len(rows), len(self.queries))
+            self.assertNotEqual(rows[0][0], "query_id")
+            for row in rows:
                 self.assertEqual(len(row) - 1, TOP_K)
                 self.assertTrue(all(value.strip() for value in row))
 

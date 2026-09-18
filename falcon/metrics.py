@@ -242,6 +242,14 @@ def evaluate_refusal(
 
     candidates: query_id -> [(gallery_id, confidence), ...]. Запрос, которого нет
     в словаре (или с пустым списком), считается отказом.
+
+    Совпадает с эталонным скриптом организаторов (organizers/evaluate.py,
+    candidate_metrics): верхний кандидат верен, если это тот же vehicle_id —
+    камера НЕ проверяется. Пара у запроса есть, если в галерее остался хотя бы
+    один позитив с другой камеры. Раньше здесь требовалась и другая камера
+    («строгое» толкование, до выхода эталонного скрипта); это занижало F1
+    с 0.82 до 0.34, потому что у 44% запросов ближайший кандидат — та же
+    машина с той же камеры.
     """
     gallery_ids = list(gallery_labels)
     index = {gid: i for i, gid in enumerate(gallery_ids)}
@@ -269,7 +277,6 @@ def evaluate_refusal(
             has_pair
             and best_gid in index
             and gallery[index[best_gid]].vehicle_id == identity.vehicle_id
-            and gallery[index[best_gid]].camera_id != identity.camera_id
         )
         if correct:
             tp += 1

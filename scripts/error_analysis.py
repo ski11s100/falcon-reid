@@ -30,8 +30,9 @@ sys.path.insert(0, str(ROOT))
 from falcon.data import build_local_split, load_crop, read_manifest  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import l2_normalize  # noqa: E402
+from falcon.submit import CALIBRATED_THRESHOLD  # noqa: E402
 
-THRESHOLD = 0.411
+THRESHOLD = CALIBRATED_THRESHOLD
 TILE = (220, 150)
 
 

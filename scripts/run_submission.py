@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ from falcon.data import read_manifest  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import performance_score  # noqa: E402
 from falcon.submit import (  # noqa: E402
+    CALIBRATED_THRESHOLD,
     SubmissionConfig,
     build_ranking,
     validate_submission,
@@ -45,8 +47,12 @@ def main() -> None:
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[Path("models/model-a.pt"), Path("models/model-b.pt")],
                         help="Веса модели. Несколько файлов — ансамбль")
-    parser.add_argument("--threshold", type=float, default=None,
-                        help="Порог отказа. Без него отказываем на всех запросах")
+    # По умолчанию — откалиброванный порог, а не «отказ на всём»: если жюри
+    # запустит сдачу без флага, режим кандидатов не должен обнулиться.
+    parser.add_argument("--threshold", type=float,
+                        default=float(os.environ.get("FALCON_MATCH_THRESHOLD", CALIBRATED_THRESHOLD)),
+                        help=f"Порог отказа (по умолчанию {CALIBRATED_THRESHOLD}, "
+                             "откалиброван под ансамбль из сдачи)")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=8)
