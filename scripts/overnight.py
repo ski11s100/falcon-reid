@@ -18,6 +18,11 @@
 
 Каждый этап пропускается, если его результат уже есть, поэтому прогон можно
 прервать и запустить заново без потери сделанного.
+
+Живучесть. Каждая модель учится в отдельном процессе под присмотром сторожа.
+Если пульс обучения (heartbeat.json) молчит дольше STALL_MINUTES, процесс
+снимается и запускается заново, а обучение продолжается с последней эпохи
+(state.pt). Так прогон переживает зависание, которое раньше стоило всей ночи.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -44,34 +51,79 @@ from falcon.metrics import (  # noqa: E402
     performance_score,
     rank_from_embeddings,
 )
-from falcon.train import TrainConfig, train  # noqa: E402
+from falcon.train import keep_system_awake  # noqa: E402
 
 # Порог полного балла за задержку — 40 мс (ответ 34). Держим запас: замер идёт
 # на нашей видеокарте, а состав ансамбля влияет на время линейно.
 LATENCY_BUDGET_MS = 36.0
+
+# Эпоха идёт около минуты, валидация — около двух. Четверть часа тишины
+# означает зависание, а не медленную работу.
+STALL_MINUTES = 15
+MAX_ATTEMPTS = 4
 
 
 def log(message: str) -> None:
     print(f"\n{'=' * 64}\n[{time.strftime('%H:%M:%S')}] {message}\n{'=' * 64}", flush=True)
 
 
+def kill_tree(process: subprocess.Popen) -> None:
+    """Снимает процесс вместе с воркерами загрузчика."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                       capture_output=True, check=False)
+    else:
+        process.kill()
+    process.wait()
+
+
+def watch(process: subprocess.Popen, heartbeat: Path) -> int | None:
+    """Ждёт завершения. None — если процесс завис и был снят сторожем."""
+    started = time.time()
+    while True:
+        try:
+            return process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        last_sign = started
+        if heartbeat.is_file():
+            last_sign = max(started, heartbeat.stat().st_mtime)
+        if time.time() - last_sign > STALL_MINUTES * 60:
+            print(f"\n[{time.strftime('%H:%M:%S')}] обучение молчит {STALL_MINUTES} мин — "
+                  f"снимаю процесс и продолжаю с последней эпохи", flush=True)
+            kill_tree(process)
+            return None
+
+
 def train_model(dataset: Path, output: Path, epochs: int, seed: int,
                 resume: Path | None, workers: int, device: str) -> Path:
     checkpoint = output / "best.pt"
-    if checkpoint.is_file():
+    # Признак завершённого обучения — last.pt. Одного best.pt мало: он
+    # появляется уже на первой валидации, и прерванный прогон выглядел бы
+    # законченным.
+    if (output / "last.pt").is_file():
         print(f"уже обучена: {checkpoint}", flush=True)
         return checkpoint
 
-    log(f"обучение {output.name}: {epochs} эпох, seed={seed}, "
-        f"инициализация {'VeRi' if resume else 'ImageNet'}")
     # Разбиение у всех моделей одно (split_seed=42), различается только зерно
     # обучения. Иначе модели видят при обучении машины, проверочные для других,
     # и сравнение ансамблей на общем сплите становится нечестным.
-    config = TrainConfig(epochs=epochs, num_workers=workers, seed=seed, split_seed=42,
-                         eval_every=10)
-    result = train(dataset, output, config, device=device, resume=resume)
-    print(json.dumps(result, ensure_ascii=False), flush=True)
-    return checkpoint
+    command = [sys.executable, "-u", str(ROOT / "falcon" / "train.py"), str(dataset),
+               "--output", str(output), "--epochs", str(epochs), "--seed", str(seed),
+               "--split-seed", "42", "--eval-every", "10", "--workers", str(workers),
+               "--device", device]
+    if resume is not None:
+        command += ["--resume", str(resume)]
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        log(f"обучение {output.name}: {epochs} эпох, seed={seed}, "
+            f"инициализация {'VeRi' if resume else 'ImageNet'}, попытка {attempt}")
+        code = watch(subprocess.Popen(command, cwd=ROOT), output / "heartbeat.json")
+        if code == 0 and (output / "last.pt").is_file():
+            return checkpoint
+        if code is not None:
+            print(f"обучение {output.name} завершилось с кодом {code}", flush=True)
+    raise RuntimeError(f"{output.name}: {MAX_ATTEMPTS} попыток не хватило")
 
 
 def evaluate_combo(checkpoints: list[Path], split, workers: int, device: str) -> dict:
@@ -79,7 +131,7 @@ def evaluate_combo(checkpoints: list[Path], split, workers: int, device: str) ->
     extractor = build_extractor(
         checkpoints,
         ExtractorConfig(batch_size=64, num_workers=workers, device=device,
-                        half=True, flip_tta=True),
+                        half=True, flip_tta=True, threads=True),
     )
     try:
         query = l2_normalize(extractor.extract(split.query, progress=False))
@@ -100,8 +152,10 @@ def evaluate_combo(checkpoints: list[Path], split, workers: int, device: str) ->
 def measure_latency(checkpoints: list[Path], rows, workers: int, device: str) -> dict:
     extractor = build_extractor(
         checkpoints,
+        # Потоки, как в контейнере на стенде: там /dev/shm 64 МБ и процессный
+        # загрузчик не используется (см. ThreadedBatchLoader).
         ExtractorConfig(batch_size=32, num_workers=workers, device=device,
-                        half=True, flip_tta=True),
+                        half=True, flip_tta=True, threads=True),
     )
     try:
         result = extractor.benchmark(rows[:128], latency_runs=120, latency_warmup=30,
@@ -132,6 +186,7 @@ def main() -> None:
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
+    keep_system_awake()
     started = time.perf_counter()
     veri = args.veri if args.veri.is_file() else None
     if veri is None:

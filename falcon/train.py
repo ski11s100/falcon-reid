@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -175,6 +176,37 @@ def write_heartbeat(output_dir: Path, payload: dict) -> None:
         pass
 
 
+def keep_system_awake() -> None:
+    """Запрещает Windows засыпать, пока жив процесс обучения.
+
+    Прогон 18.09 встал на 20-й эпохе: ноутбук ушёл в современный режим ожидания
+    (Modern Standby), и процесс, запущенный в этот момент, так и не стартовал.
+    Современный режим ожидания включается вместе с отключением экрана, поэтому
+    просим держать и систему, и дисплей. Это обычный запрос приложения, а не
+    изменение настроек: так же поступают видеоплееры, и запрос снимается сам,
+    когда процесс завершается. Закрытую крышку он не отменяет.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        es_continuous, es_system_required, es_display_required = 0x80000000, 0x1, 0x2
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            es_continuous | es_system_required | es_display_required)
+    except (AttributeError, OSError):
+        pass
+
+
+def save_state(path: Path, payload: dict) -> None:
+    """Состояние для продолжения с места обрыва. Ошибка записи не роняет обучение."""
+    temporary = path.with_suffix(".tmp")
+    try:
+        torch.save(payload, temporary)
+        temporary.replace(path)
+    except (OSError, RuntimeError) as exc:
+        print(json.dumps({"state_save_failed": str(exc)}, ensure_ascii=False), flush=True)
+
+
 def build_scheduler(optimizer, config: TrainConfig, steps_per_epoch: int):
     """Warmup + косинусное затухание, посчитанные в шагах, а не в эпохах."""
     total_steps = config.epochs * steps_per_epoch
@@ -202,8 +234,9 @@ def validate(model, gallery: list[Observation], query: list[Observation],
     was_training = model.training
     extractor = FeatureExtractor(
         model=model,
+        # threads=True: посреди обучения не порождаем процессов (см. build_loader).
         config=ExtractorConfig(size=config.size, batch_size=48, num_workers=config.num_workers,
-                               device=device, half=True, flip_tta=False),
+                               device=device, half=True, flip_tta=False, threads=True),
     )
     try:
         gallery_vectors = extractor.extract(gallery, progress=False)
@@ -264,6 +297,7 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     torch.backends.cudnn.benchmark = True
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    keep_system_awake()
     config = autoconfigure_batch(config, device)
 
     # Пути можно задать явно: предобучение идёт на стороннем наборе (VeRi-776),
@@ -326,10 +360,40 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
 
     history: list[dict] = []
     best_map = -1.0
+    first_epoch = 1
+
+    # Продолжение с места обрыва. Состояние пишется после каждой эпохи, и
+    # прерванный прогон (сон ноутбука, зависание, перезагрузка) теряет не
+    # часы обучения, а одну эпоху. Состояние чужого прогона не подхватываем:
+    # сверяем зерно, длину и зерно разбиения.
+    state_path = output_dir / "state.pt"
+    if state_path.is_file():
+        state = torch.load(state_path, map_location="cpu", weights_only=False)
+        saved = state.get("config", {})
+        same_run = all(saved.get(key) == getattr(config, key)
+                       for key in ("seed", "split_seed", "epochs"))
+        if same_run:
+            model.load_state_dict(state["model"])
+            criterion.load_state_dict(state["criterion"])
+            optimizer.load_state_dict(state["optimizer"])
+            scheduler.load_state_dict(state["scheduler"])
+            scaler.load_state_dict(state["scaler"])
+            history, best_map = state["history"], state["best_map"]
+            first_epoch = state["epoch"] + 1
+            # Иначе после продолжения PKSampler повторил бы порядок первой эпохи.
+            sampler.rng.seed(config.seed * 1000 + first_epoch)
+            print(json.dumps({"resumed": {"from_epoch": state["epoch"],
+                                          "best_mAP@10": round(best_map, 4)}},
+                             ensure_ascii=False), flush=True)
+        else:
+            print(json.dumps({"state_ignored": "другие зерно/длина прогона"},
+                             ensure_ascii=False), flush=True)
+        del state
+
     (output_dir / "config.json").write_text(
         json.dumps(asdict(config), indent=2, default=str), encoding="utf-8")
 
-    for epoch in range(1, config.epochs + 1):
+    for epoch in range(first_epoch, config.epochs + 1):
         model.train()
         epoch_started = time.perf_counter()
         running: dict[str, float] = {}
@@ -400,7 +464,16 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
         print(json.dumps(record, ensure_ascii=False), flush=True)
 
+        save_state(state_path, {
+            "epoch": epoch, "config": asdict(config), "history": history,
+            "best_map": best_map, "model": model.state_dict(),
+            "criterion": criterion.state_dict(), "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
+        })
+
     save_checkpoint(model, output_dir / "last.pt", metadata={"epoch": config.epochs})
+    # Обучение завершено, продолжать нечего, а 300 МБ состояния на модель лишние.
+    state_path.unlink(missing_ok=True)
     return {"best_mAP@10": best_map, "epochs": config.epochs, "output": str(output_dir)}
 
 
@@ -419,6 +492,8 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split-seed", type=int, default=42,
+                        help="Зерно разбиения на обучение и проверку")
     parser.add_argument("--eval-every", type=int, default=2,
                         help="Валидировать каждые N эпох")
     parser.add_argument("--no-checkpointing", action="store_true")
@@ -432,6 +507,7 @@ def main() -> None:
         num_workers=args.workers,
         amp=not args.no_amp,
         seed=args.seed,
+        split_seed=args.split_seed,
         eval_every=args.eval_every,
         grad_checkpointing=not args.no_checkpointing,
     )

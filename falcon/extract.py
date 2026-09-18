@@ -94,9 +94,19 @@ class ThreadedBatchLoader:
                 yield default_collate(batch)
 
 
-def build_loader(dataset: Dataset, batch_size: int, num_workers: int, pin_memory: bool):
-    """DataLoader на процессах, либо потоковый вариант при малом /dev/shm."""
-    if USE_THREADS and num_workers > 0:
+def build_loader(dataset: Dataset, batch_size: int, num_workers: int, pin_memory: bool,
+                 threads: bool = False):
+    """DataLoader на процессах, либо потоковый вариант.
+
+    Потоки берутся при малом /dev/shm (Docker) или по явной просьбе `threads`.
+    Просит о них валидация внутри обучения: запуск новых процессов посреди
+    многочасового прогона — единственное место, где он может застрять насовсем.
+    На Windows дочерний процесс создаётся через spawn, и родитель передаёт ему
+    данные по каналу. Если потомок не стартовал (так было, когда ноутбук ушёл
+    в режим ожидания), родитель вечно ждёт в multiprocessing.reduction.dump —
+    это показал снимок стека py-spy зависшего прогона.
+    """
+    if (USE_THREADS or threads) and num_workers > 0:
         return ThreadedBatchLoader(dataset, batch_size, num_workers)
     return DataLoader(
         dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
@@ -171,6 +181,8 @@ class ExtractorConfig:
     half: bool = True
     flip_tta: bool = True
     channels_last: bool = True
+    # Загрузка кадров потоками, без порождения процессов (см. build_loader).
+    threads: bool = False
 
 
 class FeatureExtractor:
@@ -269,7 +281,7 @@ class FeatureExtractor:
         loader = build_loader(
             CropDataset(rows, self.transform, self.config.size),
             self.config.batch_size, self.config.num_workers,
-            pin_memory=self.device.type == "cuda",
+            pin_memory=self.device.type == "cuda", threads=self.config.threads,
         )
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         started = time.perf_counter()
@@ -346,7 +358,7 @@ class FeatureExtractor:
             loader = build_loader(
                 CropDataset(sample, self.transform, self.config.size),
                 batch_size, self.config.num_workers,
-                pin_memory=self.device.type == "cuda",
+                pin_memory=self.device.type == "cuda", threads=self.config.threads,
             )
 
             # Прогрев: первый проход оплачивает запуск воркеров и подбор
@@ -455,7 +467,7 @@ class EnsembleExtractor:
         loader = build_loader(
             CropDataset(rows, self.transform, self.config.size),
             self.config.batch_size, self.config.num_workers,
-            pin_memory=self.device.type == "cuda",
+            pin_memory=self.device.type == "cuda", threads=self.config.threads,
         )
         output = np.zeros((len(rows), self.feature_dim), dtype=np.float32)
         done = 0
