@@ -133,6 +133,10 @@ body {
 
 .status__cell:last-child { border-right: none; }
 
+/* Название модели длинное (ансамбль из двух файлов): даём ему место, иначе
+ * табло вытягивается в пять строк. */
+.status__cell--wide { flex: 3 1 300px; }
+
 .status__label {
   display: block;
   font-size: 9px;
@@ -392,7 +396,9 @@ input:focus { outline: 3px solid var(--red); outline-offset: 1px; }
   margin-top: 4px;
 }
 
-.bar__fill { height: 100%; background: var(--ink); }
+/* span строчный: без display:block ширина и высота игнорируются, и шкала
+ * оставалась пустой при любой оценке. */
+.bar__fill { display: block; height: 100%; background: var(--ink); }
 .candidate--over .bar__fill { background: var(--red); }
 
 /* ---------- Предупреждения качества ---------- */
@@ -536,3 +542,44 @@ code {
   .candidate { grid-template-columns: 28px 60px minmax(0, 1fr) auto; }
   .candidate__thumb { width: 60px; height: 45px; }
 }
+
+
+/* ---------- Переключатель оформления ---------- */
+
+/* Два варианта: «Плакат» (этот файл) и «Пульт» (theme-pult.css). Переключатель
+ * стоит на виду, чтобы на защите показать оба без перезапуска сервиса. */
+
+.header__tools {
+  margin-left: auto;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.console { display: none; }
+
+.theme-switch { display: flex; }
+
+.theme-switch__option {
+  padding: 6px 12px;
+  border: 2px solid var(--paper);
+  background: transparent;
+  color: var(--paper);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.theme-switch__option + .theme-switch__option { border-left: none; }
+
+.theme-switch__option[aria-pressed="true"] {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.theme-switch__option:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }

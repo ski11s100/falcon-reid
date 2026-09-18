@@ -14,6 +14,7 @@ import base64
 import binascii
 import io
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -72,6 +73,22 @@ class ServiceState:
 state = ServiceState()
 
 
+# Вся работа с видеокартой идёт в ОДНОМ выделенном потоке.
+#
+# Обработчики FastAPI выполняются в пуле потоков, а кэш автоподбора алгоритмов
+# свёртки cuDNN (cudnn.benchmark) у PyTorch свой в каждом потоке. Первый прогон
+# в каждом новом потоке заново подбирает алгоритмы для всех свёрток ансамбля —
+# это около 6 секунд вместо 25 мс. Замерено: первый поиск сразу после загрузки
+# страницы (он идёт параллельно с /api/health и попадает в свежий поток)
+# занимал 5.8-8.8 с. Один поток — один кэш, прогретый при старте сервиса.
+# Заодно запросы к видеокарте не толкаются между собой.
+GPU = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu")
+
+
+def on_gpu(function, *args):
+    return GPU.submit(function, *args).result()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -87,6 +104,10 @@ async def lifespan(app: FastAPI):
         names = " + ".join(p.name for p in paths)
         state.model_name = (f"{VehicleReID.ARCHITECTURE} "
                             f"({'ансамбль: ' if len(paths) > 1 else ''}{names})")
+        # Прогрев: подбор алгоритмов cuDNN оплачивается при старте, а не
+        # первым запросом оператора (или жюри).
+        warmup = Image.new("RGB", (320, 240), (128, 128, 128))
+        on_gpu(state.extractor.encode_image, warmup)
     else:
         # Без обученного чекпоинта сервис поднимается, но честно сообщает об этом
         # в /api/health. Молча отдавать случайные эмбеддинги было бы хуже.
@@ -180,7 +201,7 @@ def assess_quality(crop: Image.Image) -> QualityReport:
 
 
 def embed(extractor: FeatureExtractor, crop: Image.Image) -> np.ndarray:
-    return extractor.encode_image(crop)
+    return on_gpu(extractor.encode_image, crop)
 
 
 THUMBNAIL_SIZE = (192, 144)
@@ -351,9 +372,12 @@ def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
 
     # Градиенты считаются по отдельной fp32-копии модели: рабочий путь инференса
     # идёт в half и трогать его ради объяснения нельзя.
-    tensor = extractor.transform(crop).unsqueeze(0).to(extractor.device)
-    with GradCAM(extractor.explain_model) as cam:
-        heatmap = cam.similarity_map(tensor, torch.from_numpy(reference))
+    def gradcam() -> np.ndarray:
+        tensor = extractor.transform(crop).unsqueeze(0).to(extractor.device)
+        with GradCAM(extractor.explain_model) as cam:
+            return cam.similarity_map(tensor, torch.from_numpy(reference))
+
+    heatmap = on_gpu(gradcam)
 
     overlay = overlay_heatmap(crop, heatmap)
     buffer = io.BytesIO()

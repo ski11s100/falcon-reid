@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ФАЛЬКОН — цифровой признак транспортного средства</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/theme-pult.css">
+  <script>
+    // Вариант оформления выставляется до отрисовки, иначе страница на мгновение
+    // мелькнёт в другом. ?theme=pult в адресе — для показа без щелчков.
+    (function () {
+      var theme = null;
+      try { theme = new URLSearchParams(location.search).get("theme"); } catch (e) {}
+      if (!theme) { try { theme = localStorage.getItem("falcon-theme"); } catch (e) {} }
+      if (theme === "pult") document.documentElement.setAttribute("data-theme", "pult");
+    })();
+  </script>
 </head>
 <body>
 
@@ -12,6 +23,16 @@
   <div class="header__inner">
     <h1 class="wordmark"><span class="wordmark__mark"></span>Фалькон</h1>
     <p class="tagline">Поиск транспортного средства<br>по визуальным признакам без номера</p>
+    <div class="header__tools">
+      <div class="console" aria-hidden="true">
+        <span class="console__plate">Изделие «Фалькон» · пульт оператора ПО-7</span>
+        <span class="console__clock" id="clock">МСК --:--:--</span>
+      </div>
+      <div class="theme-switch" role="group" aria-label="Вариант оформления">
+        <button type="button" class="theme-switch__option" data-theme-choice="poster">Плакат</button>
+        <button type="button" class="theme-switch__option" data-theme-choice="pult">Пульт</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -20,7 +41,7 @@
     <span class="status__label">Состояние</span>
     <span class="status__value" id="st-status">—</span>
   </div>
-  <div class="status__cell">
+  <div class="status__cell status__cell--wide">
     <span class="status__label">Модель</span>
     <span class="status__value" id="st-model">—</span>
   </div>
