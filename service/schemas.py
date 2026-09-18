@@ -74,6 +74,12 @@ class Candidate(BaseModel):
         description="Миниатюра кропа в Data URL. Оператор сверяет машины глазами, "
                     "по одному идентификатору решение принять невозможно",
     )
+    fingerprint: list[float] | None = Field(
+        default=None,
+        description="Сводка эмбеддинга для показа: проекция на 128 фиксированных "
+                    "направлений, приближённо сохраняющая сходство. Для поиска не "
+                    "используется, только для визуализации",
+    )
 
 
 class SearchResponse(BaseModel):
@@ -89,6 +95,8 @@ class SearchResponse(BaseModel):
                                         description="Полная выдача Top-K независимо от порога")
     quality: QualityReport
     elapsed_ms: float
+    fingerprint: list[float] | None = Field(
+        default=None, description="Сводка эмбеддинга запроса для визуализации (см. Candidate)")
 
 
 class RegisterResponse(BaseModel):

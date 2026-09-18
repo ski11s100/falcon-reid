@@ -1,4 +1,4 @@
-"""Вся работа сервиса с видеокартой идёт в одном потоке.
+"""Сервис: работа с видеокартой в одном потоке и отпечатки для показа.
 
 Кэш автоподбора алгоритмов cuDNN у PyTorch свой в каждом потоке. Когда поиск
 попадал в свежий поток пула FastAPI, он заново подбирал алгоритмы для всех
@@ -38,3 +38,32 @@ class TestSingleGpuThread(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestFingerprint(unittest.TestCase):
+    """Отпечаток для показа: детерминирован и отражает сходство эмбеддингов."""
+
+    def setUp(self):
+        import numpy as np
+        from service.app import FINGERPRINT_GROUPS, fingerprint
+        self.np, self.groups, self.fingerprint = np, FINGERPRINT_GROUPS, fingerprint
+
+    def test_shape_and_determinism(self):
+        vector = self.np.random.default_rng(1).standard_normal(4096).astype("float32")
+        first, second = self.fingerprint(vector), self.fingerprint(vector)
+        self.assertEqual(len(first), self.groups)
+        self.assertEqual(first, second)
+
+    def test_similar_vectors_give_similar_rings(self):
+        np = self.np
+        rng = np.random.default_rng(2)
+        base = rng.standard_normal(4096).astype("float32")
+        near = base + 0.3 * rng.standard_normal(4096).astype("float32")
+        far = rng.standard_normal(4096).astype("float32")
+        f = [np.array(self.fingerprint(v)) for v in (base, near, far)]
+        corr = lambda a, b: float(np.corrcoef(a, b)[0, 1])
+        self.assertGreater(corr(f[0], f[1]), 0.8)
+        self.assertLess(abs(corr(f[0], f[2])), 0.4)
+
+    def test_missing_embedding(self):
+        self.assertIsNone(self.fingerprint(None))

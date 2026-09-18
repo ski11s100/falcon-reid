@@ -28,6 +28,10 @@ async function refreshStatus() {
     $("st-device").textContent = health.device;
     $("st-gallery").textContent = `${health.gallery_size} наблюдений · ${health.storage}`;
 
+    if (health.embedding_dim) {
+      $("stat-dim").textContent = health.embedding_dim.toLocaleString("ru-RU");
+    }
+
     state.threshold = health.threshold_calibrated;
     $("st-threshold").textContent = health.threshold_calibrated ? "откалиброван" : "не откалиброван";
     $("st-threshold").className =
@@ -133,11 +137,18 @@ async function call(path, body) {
 
 $("btn-search").addEventListener("click", async () => {
   setBusy(true, "Поиск…");
+  scene?.setScanning(true);
   try {
-    renderSearch(await call("/api/search", payload({ top_k: 10 })));
+    const data = await call("/api/search", payload({ top_k: 10 }));
+    renderSearch(data);
+    const top = data.candidates[0];
+    scene?.showFingerprint(data.fingerprint, top
+      ? `Отпечаток запроса · ближайший кандидат ${top.vehicle_id || top.image_id}, сходство ${top.score.toFixed(3)}`
+      : "Отпечаток запроса · галерея пуста");
   } catch (error) {
     renderError(error.message);
   } finally {
+    scene?.setScanning(false);
     setBusy(false, "Найти");
   }
 });
@@ -277,13 +288,14 @@ function renderSearch(data) {
       ? `<img class="candidate__thumb" src="${candidate.thumbnail}" alt="кандидат ${index + 1}">`
       : `<span class="candidate__thumb candidate__thumb--missing">нет<br>снимка</span>`;
     return `
-      <li class="candidate ${over ? "candidate--over" : ""}">
+      <li class="candidate ${over ? "candidate--over" : ""}" style="animation-delay:${index * 35}ms">
         <span class="candidate__rank">${index + 1}</span>
         ${thumb}
         <span class="candidate__id">
           <span class="candidate__vehicle">${escapeHtml(candidate.vehicle_id || "не размечено")}</span>
           ${escapeHtml(candidate.image_id)}
         </span>
+        ${window.ringSvg ? ringSvg(candidate.fingerprint, over ? "#34c98b" : "#7cc4ff") : ""}
         <span class="candidate__score">${candidate.score.toFixed(4)}</span>
         <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
       </li>`;
@@ -341,6 +353,33 @@ function escapeHtml(value) {
   div.textContent = String(value);
   return div.innerHTML;
 }
+
+/* ---------- Оформление ---------- */
+
+// Живой отпечаток первого экрана. Скрипт может не загрузиться — тогда
+// интерфейс просто работает без анимации.
+const scene = window.FingerprintScene
+  ? new FingerprintScene($("fingerprint"), $("fp-caption"))
+  : null;
+
+function applyTheme(theme) {
+  const falcon = theme === "falcon" || theme === "pult";
+  if (falcon) document.documentElement.setAttribute("data-theme", "falcon");
+  else document.documentElement.removeAttribute("data-theme");
+  document.querySelectorAll("[data-theme-choice]").forEach((button) => {
+    button.setAttribute("aria-pressed", String((button.dataset.themeChoice === "falcon") === falcon));
+  });
+  // Выбор запоминается только в этом браузере. Хранилище может быть
+  // недоступно (приватный режим), и тогда просто не запоминаем.
+  try { localStorage.setItem("falcon-theme", falcon ? "falcon" : "poster"); } catch { /* не критично */ }
+  if (scene) falcon ? scene.start() : scene.stop();
+  renderPreview();  // рамка кадра зависит от отступов, которые у вариантов разные
+}
+
+document.querySelectorAll("[data-theme-choice]").forEach((button) => {
+  button.addEventListener("click", () => applyTheme(button.dataset.themeChoice));
+});
+applyTheme(document.documentElement.getAttribute("data-theme") || "poster");
 
 refreshStatus();
 setInterval(refreshStatus, 15000);

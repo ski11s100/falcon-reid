@@ -4,37 +4,69 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ФАЛЬКОН — цифровой признак транспортного средства</title>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/theme-pult.css">
+  <link rel="stylesheet" href="/static/theme-falcon.css">
   <script>
     // Вариант оформления выставляется до отрисовки, иначе страница на мгновение
-    // мелькнёт в другом. ?theme=pult в адресе — для показа без щелчков.
+    // мелькнёт в другом. ?theme=falcon в адресе — для показа без щелчков.
     (function () {
       var theme = null;
       try { theme = new URLSearchParams(location.search).get("theme"); } catch (e) {}
       if (!theme) { try { theme = localStorage.getItem("falcon-theme"); } catch (e) {} }
-      if (theme === "pult") document.documentElement.setAttribute("data-theme", "pult");
+      if (theme === "falcon" || theme === "pult") {
+        document.documentElement.setAttribute("data-theme", "falcon");
+      }
     })();
   </script>
 </head>
 <body>
 
+<!-- Вариант «Плакат»: шапка в духе конструктивизма. -->
 <header class="header">
   <div class="header__inner">
     <h1 class="wordmark"><span class="wordmark__mark"></span>Фалькон</h1>
     <p class="tagline">Поиск транспортного средства<br>по визуальным признакам без номера</p>
     <div class="header__tools">
-      <div class="console" aria-hidden="true">
-        <span class="console__plate">Изделие «Фалькон» · пульт оператора ПО-7</span>
-        <span class="console__clock" id="clock">МСК --:--:--</span>
-      </div>
       <div class="theme-switch" role="group" aria-label="Вариант оформления">
         <button type="button" class="theme-switch__option" data-theme-choice="poster">Плакат</button>
-        <button type="button" class="theme-switch__option" data-theme-choice="pult">Пульт</button>
+        <button type="button" class="theme-switch__option" data-theme-choice="falcon">Фалькон</button>
       </div>
     </div>
   </div>
 </header>
+
+<!-- Вариант «Фалькон»: первый экран с живым цифровым отпечатком. -->
+<section class="hero" aria-labelledby="hero-title">
+  <canvas class="hero__canvas" id="fingerprint" aria-hidden="true"></canvas>
+
+  <nav class="nav">
+    <a class="brand" href="/"><span class="brand__mark" aria-hidden="true"></span>Фалькон</a>
+    <div class="nav__right">
+      <div class="theme-switch" role="group" aria-label="Вариант оформления">
+        <button type="button" class="theme-switch__option" data-theme-choice="poster">Плакат</button>
+        <button type="button" class="theme-switch__option" data-theme-choice="falcon">Фалькон</button>
+      </div>
+      <a class="nav__link" href="/docs">API</a>
+    </div>
+  </nav>
+
+  <div class="hero__body">
+    <p class="hero__overline">Поиск транспортного средства без номера</p>
+    <h2 class="hero__title" id="hero-title">Цифровой отпечаток<br>транспортного средства</h2>
+    <p class="hero__lead">Находим одну и ту же машину на разных камерах по форме кузова, цвету,
+      дискам и особым приметам. Номерной знак не используется.</p>
+
+    <dl class="hero__stats">
+      <div class="hero__stat"><dt>0.612</dt><dd>mAP@10 на отложенной выборке</dd></div>
+      <div class="hero__stat"><dt>31 мс</dt><dd>на кадр, ансамбль из&nbsp;двух моделей</dd></div>
+      <div class="hero__stat"><dt>142</dt><dd>кадра в секунду</dd></div>
+      <div class="hero__stat"><dt id="stat-dim">4 096</dt><dd>признаков в отпечатке</dd></div>
+    </dl>
+  </div>
+
+  <p class="hero__caption" id="fp-caption" aria-live="polite">Отпечатки случайных машин · демонстрация</p>
+</section>
 
 <div class="status" id="status">
   <div class="status__cell">
@@ -77,10 +109,10 @@
     <div class="field">
       <label class="field__label">Рамка транспортного средства, пиксели</label>
       <div class="bbox-grid">
-        <input type="number" id="bx" placeholder="X" min="0" step="1">
-        <input type="number" id="by" placeholder="Y" min="0" step="1">
-        <input type="number" id="bw" placeholder="Ш" min="2" step="1">
-        <input type="number" id="bh" placeholder="В" min="2" step="1">
+        <input type="number" id="bx" placeholder="X" min="0" step="1" aria-label="X">
+        <input type="number" id="by" placeholder="Y" min="0" step="1" aria-label="Y">
+        <input type="number" id="bw" placeholder="Ш" min="2" step="1" aria-label="Ширина">
+        <input type="number" id="bh" placeholder="В" min="2" step="1" aria-label="Высота">
       </div>
       <p class="hint">Оставьте пустым, если загружаете уже вырезанный автомобиль.</p>
     </div>
@@ -93,6 +125,10 @@
     <div class="actions">
       <button class="button" id="btn-search" disabled>Найти</button>
       <button class="button button--ghost" id="btn-register" disabled>В галерею</button>
+    </div>
+
+    <div class="preview" id="preview">
+      <p class="preview__empty">Кадр не загружен</p>
     </div>
 
     <div class="panel__head panel__head--sub">
@@ -112,10 +148,6 @@
       <button class="button button--ghost" id="btn-batch" disabled>Загрузить пачкой</button>
     </div>
     <div id="batch-status"></div>
-
-    <div class="preview" id="preview">
-      <p class="preview__empty">Кадр не загружен</p>
-    </div>
   </section>
 
   <section class="panel">
@@ -135,6 +167,7 @@
   <span><a href="/docs">Спецификация OpenAPI</a></span>
 </footer>
 
+<script src="/static/fingerprint.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -4,8 +4,30 @@
     {
       "name": "falcon-api",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "service.app:app", "--host", "127.0.0.1", "--port", "8000"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "service.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
       "port": 8000
+    },
+    {
+      "name": "ui-static",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8010",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "service"
+      ],
+      "port": 8010
     }
   ]
 }
