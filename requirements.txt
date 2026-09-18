@@ -9,13 +9,16 @@
 numpy==2.5.2
 pillow==12.3.0
 
-# HTTP-сервис и OpenAPI
-fastapi==0.115.6
-starlette==0.41.3
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.0
-python-multipart==0.0.20
+# HTTP-сервис и OpenAPI. Версии обновлены 18.09.2026 по итогам pip-audit:
+# starlette 0.41.3 и python-multipart 0.0.20 имели известные уязвимости
+# (PYSEC-2026-1941, -2280, -2281, -1852, -3036..-3040). Проверка:
+#   pip-audit -r requirements.txt
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.53.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-multipart==0.0.32
 
 # Приближённый поиск для демонстрации масштабируемости (docs/SCALABILITY.md)
 faiss-cpu==1.15.1

@@ -159,13 +159,33 @@ def plate_attention(heatmap: np.ndarray) -> PlateRegionReport:
     area_share = float(mask.mean())
     concentration = attention_share / max(area_share, 1e-9)
 
+    # Карта внимания — только подсказка: в «зону номера» по геометрии попадают
+    # и решётка радиатора, фары, бампер. Вывод об опоре на номер делается
+    # маскированием (plate_masking_boxes и /api/explain), а не отсюда.
     if concentration < 1.3:
-        verdict = "зона номера не выделена"
-    elif concentration < 2.0:
-        verdict = "повышенное внимание к зоне номера, требуется проверка маскированием"
+        verdict = "нижняя центральная зона не выделена"
     else:
-        verdict = "высокая концентрация на зоне номера, риск дисквалификации"
+        verdict = "нижняя центральная зона заметна на карте; решает проверка маскированием"
     return PlateRegionReport(attention_share, area_share, concentration, verdict)
+
+
+def plate_masking_boxes(width: int, height: int) -> dict[str, tuple[int, int, int, int]]:
+    """Зона номера и контрольные зоны той же площади, в пикселях кропа.
+
+    Для проверки одной пары «запрос — кандидат»: каждая зона закрашивается на
+    запросе, и смотрится, насколько падает сходство. Если зона номера роняет его
+    не сильнее контрольных, модель на номер не опирается. Контроли фиксированы,
+    чтобы проверка была воспроизводимой.
+    """
+    def box(x0, y0, x1, y1):
+        return (int(x0 * width), int(y0 * height), int(x1 * width), int(y1 * height))
+
+    return {
+        "зона номера": box(0.33, 0.55, 0.67, 0.90),
+        "верх": box(0.33, 0.05, 0.67, 0.40),
+        "левый бок": box(0.02, 0.35, 0.36, 0.70),
+        "правый бок": box(0.64, 0.35, 0.98, 0.70),
+    }
 
 
 def mask_region(images: torch.Tensor, mask: np.ndarray, fill: float = 0.0) -> torch.Tensor:

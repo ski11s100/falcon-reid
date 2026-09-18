@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     max_upload_mb: int = 12
+    # Пачка до 200 снимков: лимит на всё тело запроса регистрации пачкой.
+    max_batch_mb: int = 96
+    # Защита от «бомб распаковки»: PNG в несколько килобайт, разворачивающийся
+    # в гигапиксельный кадр. 40 Мп с запасом покрывают любые камеры (4K — 8.3 Мп).
+    max_image_megapixels: int = 40
+
+    # Ключ API. Пусто — доступ открыт (удобно для проверки жюри одной командой).
+    # В эксплуатации задаётся FALCON_API_KEY, и все методы, кроме /api/health,
+    # требуют заголовок X-API-Key.
+    api_key: str | None = None
 
     @property
     def size(self) -> tuple[int, int]:

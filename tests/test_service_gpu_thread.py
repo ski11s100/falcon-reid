@@ -67,3 +67,28 @@ class TestFingerprint(unittest.TestCase):
 
     def test_missing_embedding(self):
         self.assertIsNone(self.fingerprint(None))
+
+
+class TestExplainParts(unittest.TestCase):
+    """Grad-CAM ансамбля: каждая модель получает свою часть вектора."""
+
+    def test_ensemble_reference_is_split_by_member(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from service.app import explain_parts
+        members = [SimpleNamespace(explain_model="A", feature_dim=3),
+                   SimpleNamespace(explain_model="B", feature_dim=2)]
+        reference = np.arange(5, dtype=np.float32)
+        parts = explain_parts(SimpleNamespace(members=members), reference)
+        self.assertEqual([m for m, _ in parts], ["A", "B"])
+        self.assertEqual(parts[0][1].tolist(), [0, 1, 2])
+        self.assertEqual(parts[1][1].tolist(), [3, 4])
+
+    def test_single_model_gets_whole_vector(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from service.app import explain_parts
+        reference = np.ones(4, dtype=np.float32)
+        parts = explain_parts(SimpleNamespace(explain_model="M"), reference)
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0][1].shape, (4,))

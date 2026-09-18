@@ -320,6 +320,14 @@ class FeatureExtractor:
         """Эмбеддинг готового кропа ТС (PIL.Image). Точка входа для сервиса."""
         return self._forward(self.transform(crop).unsqueeze(0))[0].cpu().numpy()
 
+    def encode_images(self, crops, batch_size: int = 16) -> np.ndarray:
+        """Эмбеддинги нескольких кропов одним батчем на порцию.
+
+        Для наполнения галереи пачкой: 20 снимков за один проход сети вместо
+        двадцати проходов по одному.
+        """
+        return encode_in_batches(self, crops, batch_size)
+
     def extract_one(self, row: Observation) -> np.ndarray:
         """Полный цикл на одно ТС — ровно то, что меряется при batch=1."""
         return self.encode_image(load_crop(row, target=self.config.size))
@@ -458,6 +466,9 @@ class EnsembleExtractor:
         tensor = self.transform(crop).unsqueeze(0)
         return self._forward(tensor)[0].cpu().numpy()
 
+    def encode_images(self, crops, batch_size: int = 16) -> np.ndarray:
+        return encode_in_batches(self, crops, batch_size)
+
     def extract_one(self, row: Observation) -> np.ndarray:
         return self.encode_image(load_crop(row, target=self.config.size))
 
@@ -514,6 +525,26 @@ def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None 
     return path
 
 
+def encode_in_batches(extractor, crops, batch_size: int) -> np.ndarray:
+    """Кропы -> эмбеддинги батчами ОДНОГО размера.
+
+    Неполный батч дополняется копиями последнего кропа, лишние строки потом
+    отбрасываются. Зачем: cudnn.benchmark подбирает алгоритмы свёртки заново
+    под каждую новую форму входа — около 6 секунд на форму. Пачки из 20 снимков
+    давали формы 16 и 4, и первая загрузка галереи стояла 13 секунд. С
+    выравниванием форма одна, и её прогревают при старте сервиса.
+    """
+    if not crops:
+        return np.zeros((0, extractor.feature_dim), dtype=np.float32)
+    parts = []
+    for start in range(0, len(crops), batch_size):
+        tensors = [extractor.transform(c) for c in crops[start:start + batch_size]]
+        real = len(tensors)
+        tensors += [tensors[-1]] * (batch_size - real)
+        parts.append(extractor._forward(torch.stack(tensors)).cpu().numpy()[:real])
+    return np.concatenate(parts)
+
+
 LFS_POINTER_PREFIX = b"version https://git-lfs"
 
 
@@ -528,7 +559,10 @@ def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
                 f"{path} — указатель Git LFS, а не веса модели. "
                 f"Установите Git LFS и выполните: git lfs install && git lfs pull"
             )
-    state = torch.load(path, map_location="cpu", weights_only=False)
+    # weights_only=True: распаковываются только тензоры и простые типы. Полный
+    # pickle (weights_only=False) выполнил бы код из подложенного файла весов,
+    # то есть файл весов был бы готовым вектором атаки на сервер.
+    state = torch.load(path, map_location="cpu", weights_only=True)
     if state.get("architecture") != VehicleReID.ARCHITECTURE:
         raise ValueError(
             f"Чекпоинт собран другой архитектурой: {state.get('architecture')!r}, "

@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -25,12 +26,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
-from falcon.explain import GradCAM, overlay_heatmap, plate_attention
+from falcon.explain import GradCAM, overlay_heatmap, plate_attention, plate_masking_boxes
 from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
 from falcon.model import VehicleReID
 
 from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
+from .security import (
+    BodySizeLimitMiddleware,
+    SecurityHeadersMiddleware,
+    request_body_limit,
+    require_api_key,
+)
 from .schemas import (
     BatchRegisterRequest,
     BatchRegisterResponse,
@@ -39,6 +46,7 @@ from .schemas import (
     ExplainResponse,
     HealthResponse,
     PlateAttention,
+    PlateCheck,
     QualityReport,
     RegisterRequest,
     RegisterResponse,
@@ -47,6 +55,11 @@ from .schemas import (
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+log = logging.getLogger("falcon.service")
+
+# Защита от «бомб распаковки»: Pillow по умолчанию только предупреждает до
+# 178 Мп. Здесь кадр больше лимита сразу отвергается (см. decode_image).
+Image.MAX_IMAGE_PIXELS = get_settings().max_image_megapixels * 1_000_000
 
 DESCRIPTION = """
 Сервис формирования устойчивого цифрового признака транспортного средства и
@@ -107,7 +120,8 @@ async def lifespan(app: FastAPI):
         # Прогрев: подбор алгоритмов cuDNN оплачивается при старте, а не
         # первым запросом оператора (или жюри).
         warmup = Image.new("RGB", (320, 240), (128, 128, 128))
-        on_gpu(state.extractor.encode_image, warmup)
+        on_gpu(state.extractor.encode_image, warmup)          # поиск: батч из 1
+        on_gpu(state.extractor.encode_images, [warmup])       # пачка: батч из 16
     else:
         # Без обученного чекпоинта сервис поднимается, но честно сообщает об этом
         # в /api/health. Молча отдавать случайные эмбеддинги было бы хуже.
@@ -132,6 +146,11 @@ app = FastAPI(
     docs_url="/docs",
     openapi_url="/openapi.json",
 )
+app.add_middleware(BodySizeLimitMiddleware, limit_for_path=request_body_limit)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Ключ API (если задан FALCON_API_KEY) нужен всем методам, кроме /api/health.
+protected = [Depends(require_api_key)]
 
 
 def require_model() -> FeatureExtractor:
@@ -160,8 +179,14 @@ def decode_image(payload: str, max_bytes: int) -> Image.Image:
                             detail=f"Изображение больше {max_bytes // (1024 * 1024)} МБ")
     try:
         image = Image.open(io.BytesIO(raw))
+        if image.format not in ("JPEG", "PNG", "WEBP", "BMP"):
+            raise HTTPException(status_code=415, detail="Поддерживаются JPEG, PNG, WEBP и BMP")
         image.load()
         return ImageOps.exif_transpose(image).convert("RGB")
+    except HTTPException:
+        raise
+    except Image.DecompressionBombError as exc:
+        raise HTTPException(status_code=413, detail="Слишком большое разрешение кадра") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Не удалось прочитать изображение") from exc
 
@@ -204,11 +229,11 @@ def embed(extractor: FeatureExtractor, crop: Image.Image) -> np.ndarray:
     return on_gpu(extractor.encode_image, crop)
 
 
-THUMBNAIL_SIZE = (192, 144)
+THUMBNAIL_SIZE = (320, 240)
 
 
 def make_thumbnail(crop: Image.Image) -> bytes:
-    """Небольшой JPEG для показа оператору. Около 6 КБ на снимок."""
+    """Небольшой JPEG для показа оператору и окна сравнения. Около 15 КБ."""
     thumbnail = crop.copy()
     thumbnail.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
@@ -277,7 +302,8 @@ def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
 
 
 @app.post("/api/gallery/register", response_model=RegisterResponse, status_code=201,
-          tags=["Галерея"], summary="Добавить наблюдение в галерею")
+          tags=["Галерея"], summary="Добавить наблюдение в галерею",
+          dependencies=protected)
 def register(request: RegisterRequest, settings: Settings = Depends(get_settings),
              extractor: FeatureExtractor = Depends(require_model),
              repository: VectorRepository = Depends(require_repository)) -> RegisterResponse:
@@ -301,7 +327,8 @@ def register(request: RegisterRequest, settings: Settings = Depends(get_settings
 
 
 @app.post("/api/search", response_model=SearchResponse, tags=["Поиск"],
-          summary="Найти похожие ТС или обоснованно отказаться")
+          summary="Найти похожие ТС или обоснованно отказаться",
+          dependencies=protected)
 def search(request: SearchRequest, settings: Settings = Depends(get_settings),
            extractor: FeatureExtractor = Depends(require_model),
            repository: VectorRepository = Depends(require_repository)) -> SearchResponse:
@@ -348,7 +375,8 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
 
 @app.post("/api/gallery/register-batch", response_model=BatchRegisterResponse,
           status_code=201, tags=["Галерея"],
-          summary="Добавить сразу несколько наблюдений")
+          summary="Добавить сразу несколько наблюдений",
+          dependencies=protected)
 def register_batch(request: BatchRegisterRequest,
                    settings: Settings = Depends(get_settings),
                    extractor: FeatureExtractor = Depends(require_model),
@@ -361,23 +389,28 @@ def register_batch(request: BatchRegisterRequest,
     """
     started = time.perf_counter()
     limit = settings.max_upload_mb * 1024 * 1024
-    batch: list[GalleryItem] = []
+    accepted: list[tuple] = []
     failed: list[dict] = []
 
     for entry in request.items:
         try:
             image = decode_image(entry.image_base64, limit)
-            crop = crop_to_bbox(image, entry.bbox)
-            batch.append(GalleryItem(
-                image_id=entry.image_id, vehicle_id=entry.vehicle_id,
-                embedding=embed(extractor, crop),
-                metadata={**entry.metadata, "crop": [crop.width, crop.height]},
-                thumbnail=make_thumbnail(crop),
-            ))
+            accepted.append((entry, crop_to_bbox(image, entry.bbox)))
         except HTTPException as exc:
             failed.append({"image_id": entry.image_id, "error": exc.detail})
-        except Exception as exc:
-            failed.append({"image_id": entry.image_id, "error": str(exc)[:200]})
+        except Exception:
+            # Подробности — в журнал сервера, клиенту — без внутренностей.
+            log.exception("не удалось подготовить снимок %s", entry.image_id)
+            failed.append({"image_id": entry.image_id, "error": "не удалось обработать снимок"})
+
+    # Все кропы пачки проходят сеть батчами, а не по одному: при наполнении
+    # галереи это в разы быстрее.
+    embeddings = on_gpu(extractor.encode_images, [crop for _, crop in accepted])
+    batch = [GalleryItem(
+        image_id=entry.image_id, vehicle_id=entry.vehicle_id, embedding=embedding,
+        metadata={**entry.metadata, "crop": [crop.width, crop.height]},
+        thumbnail=make_thumbnail(crop),
+    ) for (entry, crop), embedding in zip(accepted, embeddings)]
 
     registered = repository.upsert(batch) if batch else 0
     return BatchRegisterResponse(
@@ -386,8 +419,60 @@ def register_batch(request: BatchRegisterRequest,
     )
 
 
+def plate_check(extractor, crop: Image.Image, unit_reference: np.ndarray) -> PlateCheck:
+    """Опирается ли сходство этой пары на зону номера — проверка маскированием.
+
+    Запрос прогоняется целиком и с закрашенной зоной номера, а для сравнения —
+    с закрашенными контрольными зонами той же площади. Все варианты идут одним
+    батчем. Если зона номера роняет сходство не сильнее контрольных (с запасом
+    0.02), модель на номер не опирается. Это причинная проверка, а не догадка
+    по карте внимания: в «зону номера» по геометрии попадают и фары, и решётка.
+    """
+    from PIL import ImageDraw
+
+    boxes = plate_masking_boxes(crop.width, crop.height)
+    variants = [crop]
+    for box in boxes.values():
+        masked = crop.copy()
+        # Заливка средним цветом ImageNet: после нормализации это нули.
+        ImageDraw.Draw(masked).rectangle(box, fill=(124, 116, 104))
+        variants.append(masked)
+    vectors = on_gpu(extractor.encode_images, variants)
+    scores = vectors @ unit_reference
+    base = float(scores[0])
+    drops = {name: round(base - float(score), 4) for name, score in zip(boxes, scores[1:])}
+    plate_drop = drops.pop("зона номера")
+    worst_control = max(drops.values())
+    relies = plate_drop > worst_control + 0.02
+    verdict = (f"закрашивание зоны номера снижает сходство на {plate_drop:.3f}, "
+               f"контрольных зон — до {worst_control:.3f}: "
+               + ("зона номера влияет заметно сильнее, случай для разбора" if relies
+                  else "модель на номер не опирается"))
+    return PlateCheck(similarity=round(base, 6), drops={"зона номера": plate_drop, **drops},
+                      relies_on_plate=relies, verdict=verdict)
+
+
+def explain_parts(extractor, reference: np.ndarray) -> list[tuple]:
+    """Пары «модель — её часть эталонного вектора» для Grad-CAM.
+
+    Вектор ансамбля — склейка векторов моделей. Раньше карта строилась по первой
+    модели (2048 признаков) против всего вектора (4096), и объяснение для
+    ансамбля падало с ошибкой размерности. Теперь каждая модель сравнивается со
+    своей частью вектора, а карты усредняются: объяснение отражает весь ансамбль.
+    """
+    members = getattr(extractor, "members", None)
+    if not members:
+        return [(extractor.explain_model, reference)]
+    parts, offset = [], 0
+    for member in members:
+        parts.append((member.explain_model, reference[offset:offset + member.feature_dim]))
+        offset += member.feature_dim
+    return parts
+
+
 @app.post("/api/explain", response_model=ExplainResponse, tags=["Поиск"],
-          summary="Показать, какие области повлияли на сопоставление")
+          summary="Показать, какие области повлияли на сопоставление",
+          dependencies=protected)
 def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
             extractor: FeatureExtractor = Depends(require_model),
             repository: VectorRepository = Depends(require_repository)) -> ExplainResponse:
@@ -410,8 +495,13 @@ def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
     # идёт в half и трогать его ради объяснения нельзя.
     def gradcam() -> np.ndarray:
         tensor = extractor.transform(crop).unsqueeze(0).to(extractor.device)
-        with GradCAM(extractor.explain_model) as cam:
-            return cam.similarity_map(tensor, torch.from_numpy(reference))
+        maps = []
+        for model, part in explain_parts(extractor, reference):
+            with GradCAM(model) as cam:
+                maps.append(cam.similarity_map(tensor, torch.from_numpy(part)))
+        heat = np.mean(maps, axis=0)
+        span = float(heat.max() - heat.min())
+        return (heat - heat.min()) / span if span > 1e-12 else heat
 
     heatmap = on_gpu(gradcam)
 
@@ -419,25 +509,30 @@ def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
     buffer = io.BytesIO()
     overlay.save(buffer, format="PNG")
 
-    similarity = float(np.dot(embed(extractor, crop), reference / np.linalg.norm(reference)))
+    unit = reference / np.linalg.norm(reference)
     plate = plate_attention(heatmap).as_dict() if request.show_plate_region else None
+    check = plate_check(extractor, crop, unit) if request.show_plate_region else None
+    similarity = check.similarity if check else float(np.dot(embed(extractor, crop), unit))
 
     return ExplainResponse(
         gallery_id=request.gallery_id,
         similarity=round(similarity, 6),
         overlay_png_base64=base64.b64encode(buffer.getvalue()).decode(),
         plate_region=PlateAttention(**plate) if plate else None,
+        plate_check=check,
         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
     )
 
 
-@app.get("/api/gallery", tags=["Галерея"], summary="Сводка по галерее")
+@app.get("/api/gallery", tags=["Галерея"], summary="Сводка по галерее",
+          dependencies=protected)
 def list_gallery(limit: int = 100,
                  repository: VectorRepository = Depends(require_repository)) -> dict:
     return {"size": repository.count(), "vehicles": repository.list_vehicles(limit)}
 
 
-@app.delete("/api/gallery/{image_id}", tags=["Галерея"], summary="Удалить наблюдение")
+@app.delete("/api/gallery/{image_id}", tags=["Галерея"], summary="Удалить наблюдение",
+          dependencies=protected)
 def delete(image_id: str, repository: VectorRepository = Depends(require_repository)) -> dict:
     if not repository.delete(image_id):
         raise HTTPException(status_code=404, detail="Наблюдение не найдено")

@@ -21,3 +21,6 @@ runs/**/*.npy
 Thumbs.db
 .idea/
 .vscode/
+
+# Временные файлы проверки интерфейса
+service/static/_*

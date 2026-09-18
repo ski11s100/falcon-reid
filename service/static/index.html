@@ -3,171 +3,145 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>ФАЛЬКОН — цифровой признак транспортного средства</title>
+  <title>ФАЛЬКОН — поиск транспортного средства без номера</title>
+  <meta name="color-scheme" content="dark">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/theme-falcon.css">
-  <script>
-    // Вариант оформления выставляется до отрисовки, иначе страница на мгновение
-    // мелькнёт в другом. ?theme=falcon в адресе — для показа без щелчков.
-    (function () {
-      var theme = null;
-      try { theme = new URLSearchParams(location.search).get("theme"); } catch (e) {}
-      if (!theme) { try { theme = localStorage.getItem("falcon-theme"); } catch (e) {} }
-      if (theme === "falcon" || theme === "pult") {
-        document.documentElement.setAttribute("data-theme", "falcon");
-      }
-    })();
-  </script>
 </head>
 <body>
 
-<!-- Вариант «Плакат»: шапка в духе конструктивизма. -->
-<header class="header">
-  <div class="header__inner">
-    <h1 class="wordmark"><span class="wordmark__mark"></span>Фалькон</h1>
-    <p class="tagline">Поиск транспортного средства<br>по визуальным признакам без номера</p>
-    <div class="header__tools">
-      <div class="theme-switch" role="group" aria-label="Вариант оформления">
-        <button type="button" class="theme-switch__option" data-theme-choice="poster">Плакат</button>
-        <button type="button" class="theme-switch__option" data-theme-choice="falcon">Фалькон</button>
-      </div>
-    </div>
-  </div>
-</header>
+<div class="console">
 
-<!-- Вариант «Фалькон»: первый экран с живым цифровым отпечатком. -->
-<section class="hero" aria-labelledby="hero-title">
-  <canvas class="hero__canvas" id="fingerprint" aria-hidden="true"></canvas>
-
-  <nav class="nav">
+  <header class="topbar">
     <a class="brand" href="/"><span class="brand__mark" aria-hidden="true"></span>Фалькон</a>
-    <div class="nav__right">
-      <div class="theme-switch" role="group" aria-label="Вариант оформления">
-        <button type="button" class="theme-switch__option" data-theme-choice="poster">Плакат</button>
-        <button type="button" class="theme-switch__option" data-theme-choice="falcon">Фалькон</button>
-      </div>
-      <a class="nav__link" href="/docs">API</a>
+    <span class="topbar__product">Поиск транспортного средства по внешнему виду, без номера</span>
+    <div class="topbar__status" aria-label="Состояние сервиса">
+      <span class="signal" id="st-status"><span class="signal__dot"></span><span class="signal__text">подключение…</span></span>
+      <span class="topbar__item" id="st-model">—</span>
+      <span class="topbar__item" id="st-device">—</span>
     </div>
-  </nav>
+    <a class="topbar__api" href="/docs">API</a>
+  </header>
 
-  <div class="hero__body">
-    <p class="hero__overline">Поиск транспортного средства без номера</p>
-    <h2 class="hero__title" id="hero-title">Цифровой отпечаток<br>транспортного средства</h2>
-    <p class="hero__lead">Находим одну и ту же машину на разных камерах по форме кузова, цвету,
-      дискам и особым приметам. Номерной знак не используется.</p>
+  <div class="stage">
+    <canvas class="map" id="map" aria-hidden="true"></canvas>
 
-    <dl class="hero__stats">
-      <div class="hero__stat"><dt>0.612</dt><dd>mAP@10 на отложенной выборке</dd></div>
-      <div class="hero__stat"><dt>31 мс</dt><dd>на кадр, ансамбль из&nbsp;двух моделей</dd></div>
-      <div class="hero__stat"><dt>142</dt><dd>кадра в секунду</dd></div>
-      <div class="hero__stat"><dt id="stat-dim">4 096</dt><dd>признаков в отпечатке</dd></div>
-    </dl>
+    <div class="legend" aria-hidden="true">
+      <span><i class="legend__camera"></i>камера</span>
+      <span><i class="legend__car"></i>машина</span>
+      <span><i class="legend__target"></i>цель и её маршрут</span>
+    </div>
+
+    <p class="ticker" id="ticker" aria-live="polite">Камеры города узнают одну и ту же машину по внешнему виду</p>
   </div>
 
-  <p class="hero__caption" id="fp-caption" aria-live="polite">Отпечатки случайных машин · демонстрация</p>
-</section>
+  <div class="metrics" aria-label="Показатели решения">
+    <div class="metric"><b>0.612</b><span>mAP@10, отложенная выборка</span></div>
+    <div class="metric"><b>31 мс</b><span>на кадр, 2 модели</span></div>
+    <div class="metric"><b>142</b><span>кадра в секунду</span></div>
+    <div class="metric"><b id="m-dim">4 096</b><span>признаков в отпечатке</span></div>
+    <div class="metric"><b id="m-gallery">—</b><span>снимков в галерее</span></div>
+    <div class="metric"><b id="m-threshold">—</b><span>порог отказа</span></div>
+    <div class="metric"><b id="m-last">—</b><span>последний поиск</span></div>
+  </div>
 
-<div class="status" id="status">
-  <div class="status__cell">
-    <span class="status__label">Состояние</span>
-    <span class="status__value" id="st-status">—</span>
-  </div>
-  <div class="status__cell status__cell--wide">
-    <span class="status__label">Модель</span>
-    <span class="status__value" id="st-model">—</span>
-  </div>
-  <div class="status__cell">
-    <span class="status__label">Устройство</span>
-    <span class="status__value" id="st-device">—</span>
-  </div>
-  <div class="status__cell">
-    <span class="status__label">Галерея</span>
-    <span class="status__value" id="st-gallery">—</span>
-  </div>
-  <div class="status__cell">
-    <span class="status__label">Порог отказа</span>
-    <span class="status__value" id="st-threshold">—</span>
-  </div>
+  <main class="workspace">
+
+    <!-- Запрос: кадр с камеры и рамка машины. -->
+    <section class="panel panel--query" aria-label="Запрос">
+      <div class="drop" id="drop" tabindex="0">
+        <div class="drop__empty" id="drop-empty">
+          <svg class="drop__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l2-3h6l2 3h3v12H4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <p class="drop__title">Перетащите кадр с камеры</p>
+          <p class="drop__hint">или <label class="drop__pick">выберите файл<input type="file" id="file" accept="image/jpeg,image/png,image/webp"></label> · Ctrl+V из буфера</p>
+        </div>
+        <div class="frame" id="frame" hidden>
+          <img class="frame__image" id="frame-image" alt="Кадр запроса" draggable="false">
+          <div class="frame__box" id="frame-box" hidden></div>
+          <p class="frame__prompt" id="frame-prompt">Обведите машину мышью</p>
+        </div>
+      </div>
+
+      <div class="query-tools" id="query-tools" hidden>
+        <button type="button" class="text-button" id="box-clear">Сбросить рамку</button>
+        <button type="button" class="text-button" id="frame-clear">Другой кадр</button>
+        <details class="manual">
+          <summary>Рамка в пикселях</summary>
+          <div class="bbox-grid">
+            <label>X<input type="number" id="bx" min="0" step="1" inputmode="numeric"></label>
+            <label>Y<input type="number" id="by" min="0" step="1" inputmode="numeric"></label>
+            <label>Ш<input type="number" id="bw" min="2" step="1" inputmode="numeric"></label>
+            <label>В<input type="number" id="bh" min="2" step="1" inputmode="numeric"></label>
+          </div>
+        </details>
+      </div>
+
+      <button class="button" id="btn-search" disabled>Найти</button>
+
+      <div class="gallery-tools">
+        <div class="register" id="register">
+          <input type="text" id="vehicle" placeholder="ID машины, чтобы добавить кадр в галерею" maxlength="120" aria-label="Идентификатор ТС для регистрации">
+          <button class="button button--small button--ghost" id="btn-register" disabled>Добавить</button>
+        </div>
+        <label class="text-button text-button--file">Загрузить галерею пачкой…
+          <input type="file" id="batch" accept="image/jpeg,image/png,image/webp" multiple></label>
+        <div id="batch-status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- Результат поиска. До первого запроса — короткая подсказка. -->
+    <section class="panel panel--result" id="result-panel" aria-label="Результат">
+      <div class="result-empty" id="result-empty">
+        <p class="result-empty__title">Здесь появятся найденные снимки</p>
+        <p class="result-empty__text">Загрузите кадр слева, обведите машину и нажмите «Найти». Сервис покажет десять самых похожих снимков из галереи или честно откажется, если уверенного совпадения нет. На схеме сверху найденные снимки появятся у камер.</p>
+      </div>
+      <div id="result-body" hidden>
+      <div class="result-head">
+        <div class="verdict" id="verdict"></div>
+        <div class="export">
+          <button type="button" class="chip-button" id="export-csv">CSV</button>
+          <button type="button" class="chip-button" id="export-json">JSON</button>
+        </div>
+      </div>
+      <p class="result-meta" id="result-meta"></p>
+      <ol class="candidates" id="candidates"></ol>
+      <ul class="warnings" id="warnings"></ul>
+      </div>
+    </section>
+
+  </main>
+
 </div>
 
-<main class="layout">
+<dialog class="dialog" id="compare" aria-labelledby="compare-title">
+  <form method="dialog" class="dialog__close-form"><button class="dialog__close" aria-label="Закрыть">×</button></form>
+  <h2 class="dialog__title" id="compare-title">Сравнение</h2>
+  <p class="dialog__meta" id="compare-meta"></p>
+  <div class="compare">
+    <figure>
+      <div class="compare__image"><img id="compare-query" alt="Запрос"></div>
+      <figcaption>Запрос <label class="switch"><input type="checkbox" id="compare-heat"> куда смотрела модель</label></figcaption>
+    </figure>
+    <figure>
+      <div class="compare__image"><img id="compare-candidate" alt="Кандидат"></div>
+      <figcaption id="compare-candidate-caption">Кандидат</figcaption>
+    </figure>
+  </div>
+  <p class="dialog__note" id="compare-explain"></p>
+</dialog>
 
-  <section class="panel">
-    <div class="panel__head">
-      <span class="panel__num">1</span>
-      <h2 class="panel__title">Запрос</h2>
-    </div>
+<dialog class="dialog dialog--narrow" id="key-dialog" aria-labelledby="key-title">
+  <form method="dialog">
+    <h2 class="dialog__title" id="key-title">Нужен ключ API</h2>
+    <p class="dialog__note">Сервис защищён ключом (FALCON_API_KEY). Ключ хранится только в этой вкладке.</p>
+    <input type="password" id="key-input" autocomplete="off" required>
+    <button class="button" value="ok">Продолжить</button>
+  </form>
+</dialog>
 
-    <div class="field">
-      <label class="field__label" for="file">Кадр с камеры</label>
-      <input type="file" id="file" accept="image/jpeg,image/png">
-      <p class="hint">Полный кадр в исходном разрешении. Детекция в задачу не входит —
-        рамку задаёт внешняя система.</p>
-    </div>
+<div class="toast" id="toast" role="status" hidden></div>
 
-    <div class="field">
-      <label class="field__label">Рамка транспортного средства, пиксели</label>
-      <div class="bbox-grid">
-        <input type="number" id="bx" placeholder="X" min="0" step="1" aria-label="X">
-        <input type="number" id="by" placeholder="Y" min="0" step="1" aria-label="Y">
-        <input type="number" id="bw" placeholder="Ш" min="2" step="1" aria-label="Ширина">
-        <input type="number" id="bh" placeholder="В" min="2" step="1" aria-label="Высота">
-      </div>
-      <p class="hint">Оставьте пустым, если загружаете уже вырезанный автомобиль.</p>
-    </div>
-
-    <div class="field">
-      <label class="field__label" for="vehicle">Идентификатор ТС для регистрации</label>
-      <input type="text" id="vehicle" placeholder="например, car-0417" maxlength="120">
-    </div>
-
-    <div class="actions">
-      <button class="button" id="btn-search" disabled>Найти</button>
-      <button class="button button--ghost" id="btn-register" disabled>В галерею</button>
-    </div>
-
-    <div class="preview" id="preview">
-      <p class="preview__empty">Кадр не загружен</p>
-    </div>
-
-    <div class="panel__head panel__head--sub">
-      <span class="panel__num">1Б</span>
-      <h2 class="panel__title">Наполнить галерею пачкой</h2>
-    </div>
-
-    <div class="field">
-      <label class="field__label" for="batch">Несколько снимков сразу</label>
-      <input type="file" id="batch" accept="image/jpeg,image/png" multiple>
-      <p class="hint">Выделите любое количество файлов. Идентификатор ТС берётся из
-        имени файла до первого подчёркивания: <code>ТС-881_камера-10.jpg</code> даёт
-        <code>ТС-881</code>. Поштучная загрузка для наполнения базы непрактична.</p>
-    </div>
-
-    <div class="actions">
-      <button class="button button--ghost" id="btn-batch" disabled>Загрузить пачкой</button>
-    </div>
-    <div id="batch-status"></div>
-  </section>
-
-  <section class="panel">
-    <div class="panel__head">
-      <span class="panel__num">2</span>
-      <h2 class="panel__title">Результат</h2>
-    </div>
-    <div id="result">
-      <div class="empty-state">Загрузите кадр и запустите поиск</div>
-    </div>
-  </section>
-
-</main>
-
-<footer class="footer">
-  <span>Совпадение оценивается по визуальным признакам: форма кузова, цвет, диски, наклейки, повреждения</span>
-  <span><a href="/docs">Спецификация OpenAPI</a></span>
-</footer>
-
-<script src="/static/fingerprint.js"></script>
+<script src="/static/city.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

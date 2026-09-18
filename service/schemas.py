@@ -39,18 +39,42 @@ class ImagePayload(BaseModel):
         return value
 
 
+def _printable(value: str | None) -> str | None:
+    """Идентификаторы без управляющих символов: они попадают в журналы и интерфейс."""
+    if value is not None and any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError("Идентификатор содержит управляющие символы")
+    return value
+
+
 class RegisterRequest(ImagePayload):
-    image_id: str = Field(max_length=120, description="Уникальный идентификатор наблюдения")
+    image_id: str = Field(min_length=1, max_length=120,
+                          description="Уникальный идентификатор наблюдения")
     vehicle_id: str | None = Field(default=None, max_length=120,
                                    description="Известный идентификатор ТС, если он есть")
-    metadata: dict = Field(default_factory=dict, description="Произвольные метаданные наблюдения")
+    metadata: dict = Field(default_factory=dict,
+                           description="Произвольные метаданные наблюдения, до 4 КБ в JSON")
+
+    @field_validator("image_id", "vehicle_id")
+    @classmethod
+    def printable(cls, value: str | None) -> str | None:
+        return _printable(value)
+
+    @field_validator("metadata")
+    @classmethod
+    def small_metadata(cls, value: dict) -> dict:
+        # Метаданные хранятся в базе вместе с каждым снимком: без лимита клиент
+        # мог бы складывать туда мегабайты на запись.
+        import json
+        if len(json.dumps(value, ensure_ascii=False, default=str)) > 4096:
+            raise ValueError("Метаданные больше 4 КБ")
+        return value
 
 
 class SearchRequest(ImagePayload):
     top_k: int = Field(default=10, ge=1, le=100, description="Сколько кандидатов вернуть")
     threshold: float | None = Field(
-        default=None,
-        description="Переопределить порог принятия решения для этого запроса",
+        default=None, ge=-1.0, le=1.0,
+        description="Переопределить порог принятия решения для этого запроса (косинус, -1..1)",
     )
 
 
@@ -125,6 +149,16 @@ class PlateAttention(BaseModel):
     verdict: str
 
 
+class PlateCheck(BaseModel):
+    """Проверка маскированием: опирается ли сопоставление на зону номера."""
+
+    similarity: float = Field(description="Сходство запроса и кандидата без изменений")
+    drops: dict[str, float] = Field(
+        description="Падение сходства при закрашивании каждой зоны той же площади")
+    relies_on_plate: bool
+    verdict: str
+
+
 class ExplainResponse(BaseModel):
     """Карта важности областей. Раздел 10 ТЗ: интерпретируемость решения."""
 
@@ -132,6 +166,8 @@ class ExplainResponse(BaseModel):
     similarity: float
     overlay_png_base64: str = Field(description="Кроп с наложенной картой важности")
     plate_region: PlateAttention | None = None
+    plate_check: PlateCheck | None = Field(
+        default=None, description="Закрашивание зоны номера против контрольных зон")
     elapsed_ms: float
 
 
