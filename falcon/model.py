@@ -176,8 +176,16 @@ class GeM(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pooled = F.avg_pool2d(x.clamp(min=self.eps).pow(self.p), (x.size(-2), x.size(-1)))
-        return pooled.pow(1.0 / self.p).flatten(1)
+        # Степень считается в float32 и при инференсе в fp16. Потолок fp16 —
+        # 65504, а обучаемая p за 140 эпох выросла до 3.95: активация 16.6 в
+        # такой степени уже бесконечна. Ночной перебор ансамблей упал именно
+        # на этом (NaN в признаках), хотя валидация при обучении была чистой:
+        # там работает autocast, который сам считает pow в float32.
+        # Результат после корня снова порядка самих активаций и в fp16 влезает;
+        # тип выхода берём у параметра, то есть у остальной модели.
+        pooled = F.avg_pool2d(x.float().clamp(min=self.eps).pow(self.p.float()),
+                              (x.size(-2), x.size(-1)))
+        return pooled.pow(1.0 / self.p.float()).flatten(1).to(self.p.dtype)
 
 
 def weights_init_kaiming(module: nn.Module) -> None:
