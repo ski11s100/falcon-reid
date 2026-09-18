@@ -2,6 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "falcon-docker",
+      "url": "http://localhost:8000",
+      "port": 8000
+    },
+    {
       "name": "falcon-api",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [
@@ -11,23 +16,9 @@
         "--host",
         "127.0.0.1",
         "--port",
-        "8000"
+        "8001"
       ],
-      "port": 8000
-    },
-    {
-      "name": "ui-static",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8010",
-        "--bind",
-        "127.0.0.1",
-        "--directory",
-        "service"
-      ],
-      "port": 8010
+      "port": 8001
     }
   ]
 }
