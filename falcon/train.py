@@ -86,6 +86,8 @@ class TrainConfig:
     # порядки ниже, чем для новой головы: большой шаг стирает то, чему энкодер
     # научился на 400 млн картинок (приём из CLIP-ReID). None — одна на всё.
     backbone_lr: float | None = None
+    # Доля кадров с закрашенной зоной номера (transforms.PlateZoneErase).
+    plate_erase: float = 0.0
 
 
 def autoconfigure_batch(config: TrainConfig, device: str) -> TrainConfig:
@@ -363,7 +365,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     # Один долгоживущий загрузчик на всё обучение: PKSampler отдаёт индексы,
     # воркеры поднимаются один раз, декодирование идёт параллельно forward-проходу.
     train_loader = DataLoader(
-        CropDataset(split.train, build_train_transform(config.size), config.size, labels=label_index),
+        CropDataset(split.train, build_train_transform(config.size, plate_erase=config.plate_erase),
+                    config.size, labels=label_index),
         batch_sampler=sampler,
         num_workers=config.num_workers,
         pin_memory=device.startswith("cuda"),
@@ -503,6 +506,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--plate-erase", type=float, default=0.0,
+                        help="Доля кадров с закрашенной зоной номера при обучении")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--split-seed", type=int, default=42,
@@ -533,6 +538,7 @@ def main() -> None:
         backbone_lr=args.backbone_lr,
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
+        plate_erase=args.plate_erase,
     )
     result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
                    csv_path=args.csv, images_dir=args.images)
