@@ -52,13 +52,13 @@ COPY scripts ./scripts
 
 # Веса внутри образа: три модели ансамбля. Суммарный размер весов ограничен
 # 2 ГБ (раздел 7 ТЗ): две CLIP ViT-B/16 в fp16 (347 МБ) и ResNet50-IBN-a
-# (104 МБ) — 451 МБ.
+# (52 МБ), все в fp16 — 399 МБ.
 COPY models ./models
 
 # По умолчанию — тот же ансамбль и порог, что в сдаче и в docker-compose:
 # порог откалиброван под этот состав моделей и на одну модель не переносится.
 ENV FALCON_CHECKPOINTS=/opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-veri-ours.pt,/opt/falcon/models/resnet-v2-veri.pt \
-    FALCON_MATCH_THRESHOLD=0.525 \
+    FALCON_MATCH_THRESHOLD=0.51 \
     FALCON_FLIP_TTA=false \
     FALCON_DEVICE=cuda \
     FALCON_HOST=0.0.0.0 \

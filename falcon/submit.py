@@ -38,7 +38,8 @@ from .rerank import build_gallery_index, rerank_query
 
 
 # Состав сдачи: две модели CLIP ViT-B/16 (на конкурсных данных и после VeRi-776)
-# и ResNet50-IBN-a после VeRi-776, без отражения кадра. Выбор по баллам
+# и ResNet50-IBN-a после VeRi-776, все дообучены с закраской зоны номера
+# (scripts/finetune_plate_erase.py), без отражения кадра. Выбор по баллам
 # точности, кандидатов и скорости — scripts/compare_ensembles.py, отчёт
 # docs/ensemble_choice.json. Отражение удваивает вычисления, а даёт лишь
 # +0.003 mAP@10: без него 143 кадра/с и 31 мс на RTX 3060 Laptop при порогах
@@ -56,8 +57,8 @@ SUBMISSION_FLIP_TTA = False
 # без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
 #
 # Порог калибруется под состав моделей: у ансамбля двух ResNet он был 0.4925,
-# у ансамбля с CLIP сходства в целом выше, и порог сдвинулся к 0.525.
-CALIBRATED_THRESHOLD = 0.525
+# у ансамбля с CLIP сходства в целом выше, и порог сдвинулся к 0.51.
+CALIBRATED_THRESHOLD = 0.51
 
 
 @dataclass
