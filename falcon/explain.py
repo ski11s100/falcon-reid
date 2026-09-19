@@ -29,20 +29,29 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .model import VehicleReID
+from .model import VehicleReID, ViTReID
 
 
 class GradCAM:
-    """Карта важности по градиентам последнего свёрточного блока.
+    """Карта важности по градиентам последнего блока сети.
+
+    ResNet: выход layer4, карта признаков 16×16. ViT: вход последнего блока
+    внимания (blocks[-1].norm1). Вектор ViT берётся из CLS-токена, и патч-токены
+    на ВЫХОДЕ последнего блока на него уже не влияют: градиент по ним нулевой.
+    Поэтому берётся вход последнего внимания, где CLS ещё собирает информацию
+    с патчей, а токены раскладываются обратно в сетку патчей 16×16.
 
     Использование:
         with GradCAM(model) as cam:
             heat = cam.similarity_map(query_tensor, reference_embedding)
     """
 
-    def __init__(self, model: VehicleReID, layer: nn.Module | None = None):
+    def __init__(self, model: VehicleReID | ViTReID, layer: nn.Module | None = None):
         self.model = model
-        self.layer = layer if layer is not None else model.backbone.layer4
+        self.tokens = isinstance(model, ViTReID)
+        if layer is None:
+            layer = model.backbone.blocks[-1].norm1 if self.tokens else model.backbone.layer4
+        self.layer = layer
         self._activations: torch.Tensor | None = None
         self._gradients: torch.Tensor | None = None
         self._handles: list = []
@@ -63,8 +72,17 @@ class GradCAM:
     def _save_gradients(self, module, grad_input, grad_output) -> None:
         self._gradients = grad_output[0]
 
+    def _as_grid(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Токены ViT (B, 1+N, C) -> карта (B, C, h, w) без служебных токенов."""
+        backbone = self.model.backbone
+        height, width = backbone.patch_embed.grid_size
+        patches = tokens[:, backbone.num_prefix_tokens:, :]
+        return patches.reshape(tokens.size(0), height, width, -1).permute(0, 3, 1, 2)
+
     def _embed(self, images: torch.Tensor) -> torch.Tensor:
         """Прямой проход с сохранением графа: inference_mode здесь недопустим."""
+        if self.tokens:
+            return self.model(images)  # в режиме eval ViTReID отдаёт нормированный вектор
         pooled = self.model.pool(self.model.backbone(images))
         feature = self.model.bottleneck(self.model.reduce(pooled))
         return F.normalize(feature, dim=1)
@@ -99,8 +117,11 @@ class GradCAM:
             # Вес канала — среднее его градиента: насколько сильно канал влияет
             # на близость. Отрицательный вклад отбрасывается ReLU: интересуют
             # области, которые СБЛИЖАЮТ снимки, а не отдаляют.
-            weights = self._gradients.mean(dim=(2, 3), keepdim=True)
-            cam = F.relu((weights * self._activations).sum(dim=1, keepdim=True))
+            activations, gradients = self._activations, self._gradients
+            if self.tokens:
+                activations, gradients = self._as_grid(activations), self._as_grid(gradients)
+            weights = gradients.mean(dim=(2, 3), keepdim=True)
+            cam = F.relu((weights * activations).sum(dim=1, keepdim=True))
             cam = F.interpolate(cam, size=images.shape[-2:], mode="bilinear", align_corners=False)
 
             heat = cam[0, 0].detach().float().cpu().numpy()

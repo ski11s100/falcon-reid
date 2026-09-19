@@ -164,12 +164,13 @@ MODEL_TITLES = {VehicleReID.ARCHITECTURE: "ResNet50-IBN", ViTReID.ARCHITECTURE: 
 
 
 def summarise_models(extractor) -> str:
-    """«2 × ResNet50-IBN» или «ResNet50-IBN + CLIP ViT-B/16» — для строки состояния."""
+    """«2 × CLIP ViT-B/16 + ResNet50-IBN» — состав ансамбля для строки состояния."""
     members = getattr(extractor, "members", None) or [extractor]
-    titles = [MODEL_TITLES.get(m.model.ARCHITECTURE, m.model.ARCHITECTURE) for m in members]
-    if len(titles) > 1 and len(set(titles)) == 1:
-        return f"{len(titles)} × {titles[0]}"
-    return " + ".join(titles)
+    counts: dict[str, int] = {}
+    for member in members:
+        title = MODEL_TITLES.get(member.model.ARCHITECTURE, member.model.ARCHITECTURE)
+        counts[title] = counts.get(title, 0) + 1
+    return " + ".join(f"{n} × {title}" if n > 1 else title for title, n in counts.items())
 
 
 def require_model() -> FeatureExtractor:
@@ -486,10 +487,9 @@ def explain_parts(extractor, reference: np.ndarray) -> list[tuple]:
         return [(extractor.explain_model, reference)]
     parts, offset = [], 0
     for member in members:
-        # Grad-CAM строится по свёрточной карте признаков: у ViT её нет, и такой
-        # участник ансамбля в карту внимания не входит.
-        if isinstance(member.model, VehicleReID):
-            parts.append((member.explain_model, reference[offset:offset + member.feature_dim]))
+        # Grad-CAM умеет и ResNet (карта layer4), и ViT (сетка патчей), так что
+        # в карту внимания входят все участники ансамбля.
+        parts.append((member.explain_model, reference[offset:offset + member.feature_dim]))
         offset += member.feature_dim
     return parts
 

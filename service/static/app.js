@@ -33,6 +33,18 @@ scene?.start();
 // Щелчок по снимку кандидата на схеме открывает то же окно сравнения.
 if (scene) scene.onPick = (index) => openCompare(index);
 
+// Схема города — иллюстрация. Её сбой (например, холст нулевого размера в
+// скрытой вкладке) не должен ронять поиск: ошибка уходит в консоль, а
+// результат всё равно показывается.
+function onScene(action) {
+  if (!scene) return;
+  try {
+    action(scene);
+  } catch (error) {
+    console.warn("схема города:", error);
+  }
+}
+
 /* ---------- Связь с сервером ---------- */
 
 function apiKey() {
@@ -135,7 +147,7 @@ async function loadFrame(file) {
     setBBox(null);
     $("btn-search").disabled = false;
     $("btn-register").disabled = false;
-    scene?.setQuery(true);
+    onScene((city) => city.setQuery(true));
   };
   image.src = dataUrl;
 }
@@ -151,7 +163,7 @@ function resetFrame() {
   $("btn-search").disabled = true;
   $("btn-register").disabled = true;
   $("file").value = "";
-  scene?.setQuery(false);
+  onScene((city) => city.setQuery(false));
 }
 
 $("file").addEventListener("change", (event) => loadFrame(event.target.files[0]));
@@ -289,7 +301,7 @@ function resultCaption(data) {
 async function search() {
   if (!state.dataUrl) return;
   busy("btn-search", true, "Поиск…");
-  scene?.setScanning(true);
+  onScene((city) => city.setScanning(true));
   const started = performance.now();
   try {
     const request = payload({ top_k: 10 });
@@ -303,10 +315,10 @@ async function search() {
     remember(state.lastSearch);
     renderSearch(data);
     $("m-last").textContent = `${Math.round(data.elapsed_ms)} мс`;
-    scene?.setScanning(false);
-    scene?.showResults(data.candidates, data.threshold, resultCaption(data));
+    onScene((city) => city.setScanning(false));
+    onScene((city) => city.showResults(data.candidates, data.threshold, resultCaption(data)));
   } catch (error) {
-    scene?.setScanning(false);
+    onScene((city) => city.setScanning(false));
     renderError(error.message);
   } finally {
     busy("btn-search", false, "Найти");
@@ -448,7 +460,7 @@ function renderConfidence(data) {
     <div class="confidence__track">
       ${threshold !== null ? `<span class="confidence__zone" style="left:${position(threshold)}"></span>
         <span class="confidence__threshold" style="left:${position(threshold)}">
-          <span>порог ${threshold.toFixed(2)}</span></span>` : ""}
+          <span>порог ${formatThreshold(threshold)}</span></span>` : ""}
       ${dots}
     </div>
     <div class="confidence__scale"><span>0</span><span>0.25</span><span>0.5</span><span>0.75</span><span>1 · сходство</span></div>`;
@@ -577,7 +589,7 @@ function renderError(message) {
   $("confidence").hidden = true;
   document.querySelector(".result-tools").hidden = true;
   showResultBody();
-  scene?.setCaption(`Ошибка: ${message}`);
+  onScene((city) => city.setCaption(`Ошибка: ${message}`));
 }
 
 // Любой элемент с data-index в результате — снимок кандидата: открыть сравнение.
@@ -589,9 +601,9 @@ function renderError(message) {
 // Наведение на кандидата подсвечивает его снимок на схеме города.
 $("candidates").addEventListener("mouseover", (event) => {
   const target = event.target.closest("[data-index]");
-  scene?.setHighlight(target ? Number(target.dataset.index) : null);
+  onScene((city) => city.setHighlight(target ? Number(target.dataset.index) : null));
 });
-$("candidates").addEventListener("mouseleave", () => scene?.setHighlight(null));
+$("candidates").addEventListener("mouseleave", () => onScene((city) => city.setHighlight(null)));
 
 document.querySelectorAll(".segmented__option").forEach((button) => {
   button.addEventListener("click", () => {
@@ -784,8 +796,8 @@ $("history").addEventListener("click", (event) => {
     state.explainCache.clear();
     renderSearch(item.data);
     renderHistory();
-    scene?.setQuery(true);
-    scene?.showResults(item.data.candidates, item.data.threshold, resultCaption(item.data));
+    onScene((city) => city.setQuery(true));
+    onScene((city) => city.showResults(item.data.candidates, item.data.threshold, resultCaption(item.data)));
   };
   image.src = item.frame.dataUrl;
 });

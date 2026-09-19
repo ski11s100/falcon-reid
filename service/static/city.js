@@ -144,6 +144,7 @@
 
     /* Цель переносится на перекрёсток в центре видимой части карты. */
     centreTarget() {
+      if (!this.xs) return;   // город ещё не построен: холст нулевого размера
       const want = [((this.safeLeft ?? 0) + (this.safeRight ?? this.width)) / 2, this.height * 0.58];
       let best = null;
       let bestDistance = Infinity;
@@ -186,6 +187,9 @@
 
     /* Найденные снимки раскладываются по камерам, ближайшим к цели. */
     showResults(candidates, threshold, caption) {
+      // Холст ещё нулевого размера (скрытая вкладка): покажем после постройки.
+      if (!this.cameras) { this.pending = [candidates, threshold, caption]; return; }
+      this.pending = null;
       const target = this.target;
       const byDistance = this.cameras.slice().sort((a, b) =>
         Math.hypot(a.u - target.u, a.v - target.v) - Math.hypot(b.u - target.u, b.v - target.v));
@@ -235,6 +239,8 @@
       this.angle = -0.62;           // поворот карты: улицы идут по диагонали
       this.squash = 0.56;           // сжатие по вертикали: вид сверху под углом
       this.build();
+      if (this.query) this.centreTarget();
+      if (this.pending) this.showResults(...this.pending);
       if (!this.running) this.draw();
     }
 

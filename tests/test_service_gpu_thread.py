@@ -87,20 +87,20 @@ class TestExplainParts(unittest.TestCase):
         self.assertEqual(parts[0][1].tolist(), [0, 1, 2])
         self.assertEqual(parts[1][1].tolist(), [3, 4])
 
-    def test_vit_member_is_skipped_but_keeps_offset(self):
+    def test_mixed_ensemble_includes_vit_member(self):
         import numpy as np
         from types import SimpleNamespace
         from falcon.model import VehicleReID, ViTReID
         from service.app import explain_parts
-        # У ViT нет свёрточной карты признаков: Grad-CAM строится по ResNet,
-        # но смещение в склеенном векторе учитывает и часть ViT.
+        # Grad-CAM строится и по ViT (сетка патчей): в карту входят все участники.
         members = [SimpleNamespace(model=ViTReID.__new__(ViTReID), explain_model="V", feature_dim=2),
                    SimpleNamespace(model=VehicleReID.__new__(VehicleReID), explain_model="R",
                                    feature_dim=3)]
         reference = np.arange(5, dtype=np.float32)
         parts = explain_parts(SimpleNamespace(members=members), reference)
-        self.assertEqual([m for m, _ in parts], ["R"])
-        self.assertEqual(parts[0][1].tolist(), [2, 3, 4])
+        self.assertEqual([m for m, _ in parts], ["V", "R"])
+        self.assertEqual(parts[0][1].tolist(), [0, 1])
+        self.assertEqual(parts[1][1].tolist(), [2, 3, 4])
 
     def test_single_model_gets_whole_vector(self):
         import numpy as np
@@ -110,3 +110,17 @@ class TestExplainParts(unittest.TestCase):
         parts = explain_parts(SimpleNamespace(explain_model="M"), reference)
         self.assertEqual(len(parts), 1)
         self.assertEqual(parts[0][1].shape, (4,))
+
+
+class TestModelSummary(unittest.TestCase):
+    """Строка состава ансамбля в шапке интерфейса."""
+
+    def test_repeated_architectures_are_grouped(self):
+        from types import SimpleNamespace
+        from falcon.model import VehicleReID, ViTReID
+        from service.app import summarise_models
+        vit, resnet = ViTReID.__new__(ViTReID), VehicleReID.__new__(VehicleReID)
+        ensemble = SimpleNamespace(members=[SimpleNamespace(model=vit), SimpleNamespace(model=vit),
+                                            SimpleNamespace(model=resnet)])
+        self.assertEqual(summarise_models(ensemble), "2 × CLIP ViT-B/16 + ResNet50-IBN")
+        self.assertEqual(summarise_models(SimpleNamespace(model=resnet)), "ResNet50-IBN")
