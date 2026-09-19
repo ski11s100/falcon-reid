@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     device: str = "cuda"
     batch_size: int = 32
     input_size: int = 256
-    flip_tta: bool = True
+    # Отражение кадра (flip TTA) выключено, как в сдаче: у ансамбля с CLIP оно
+    # даёт +0.003 mAP@10 ценой двойных вычислений (falcon/submit.py).
+    flip_tta: bool = False
     half: bool = True
 
     # Хранилище. Пустой DSN означает локальный SQLite — удобно для разработки,

@@ -50,18 +50,22 @@ COPY falcon ./falcon
 COPY service ./service
 COPY scripts ./scripts
 
-# Веса внутри образа: две модели ансамбля. Суммарный размер весов ограничен
-# 2 ГБ (раздел 7 ТЗ), две ResNet50-IBN-a занимают 199 МБ.
+# Веса внутри образа: три модели ансамбля. Суммарный размер весов ограничен
+# 2 ГБ (раздел 7 ТЗ): две CLIP ViT-B/16 в fp16 (347 МБ) и ResNet50-IBN-a
+# (104 МБ) — 451 МБ.
 COPY models ./models
 
 # По умолчанию — тот же ансамбль и порог, что в сдаче и в docker-compose:
 # порог откалиброван под этот состав моделей и на одну модель не переносится.
-ENV FALCON_CHECKPOINTS=/opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt \
-    FALCON_MATCH_THRESHOLD=0.4925 \
+ENV FALCON_CHECKPOINTS=/opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-veri-ours.pt,/opt/falcon/models/resnet-v2-veri.pt \
+    FALCON_MATCH_THRESHOLD=0.525 \
+    FALCON_FLIP_TTA=false \
     FALCON_DEVICE=cuda \
     FALCON_HOST=0.0.0.0 \
     FALCON_PORT=8000 \
-    FALCON_SQLITE_PATH=/opt/falcon/data/falcon.sqlite3
+    FALCON_SQLITE_PATH=/opt/falcon/data/falcon.sqlite3 \
+    HF_HUB_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
 
 # Непривилегированный пользователь для сервиса. docker-compose запускает api
 # от него (user: 10001) с файловой системой только для чтения. Образ по

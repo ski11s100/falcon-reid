@@ -33,6 +33,8 @@ from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import performance_score  # noqa: E402
 from falcon.submit import (  # noqa: E402
     CALIBRATED_THRESHOLD,
+    SUBMISSION_CHECKPOINTS,
+    SUBMISSION_FLIP_TTA,
     SubmissionConfig,
     build_ranking,
     validate_submission,
@@ -45,7 +47,7 @@ def main() -> None:
     parser.add_argument("dataset", type=Path, help="Каталог с test_query.csv, test_gallery.csv, images/")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--checkpoints", type=Path, nargs="+",
-                        default=[Path("models/model-a.pt"), Path("models/model-b.pt")],
+                        default=[Path(p) for p in SUBMISSION_CHECKPOINTS],
                         help="Веса модели. Несколько файлов — ансамбль")
     # По умолчанию — откалиброванный порог, а не «отказ на всём»: если жюри
     # запустит сдачу без флага, режим кандидатов не должен обнулиться.
@@ -56,7 +58,8 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--no-flip-tta", action="store_true")
+    parser.add_argument("--flip-tta", action="store_true", default=SUBMISSION_FLIP_TTA,
+                        help="Усреднять вектор с отражённым кадром (в сдаче выключено)")
     parser.add_argument("--rerank", action="store_true",
                         help="Включить k-reciprocal. Только после проверки на валидации")
     parser.add_argument("--benchmark", action="store_true",
@@ -76,7 +79,7 @@ def main() -> None:
         args.checkpoints,
         ExtractorConfig(batch_size=args.batch_size, num_workers=args.workers,
                         device=args.device, half=True,
-                        flip_tta=not args.no_flip_tta),
+                        flip_tta=args.flip_tta),
     )
 
     # Порядок строго фиксирован: сначала все query в порядке test_query.csv,

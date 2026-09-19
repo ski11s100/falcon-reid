@@ -1,14 +1,14 @@
 {
   "format": "falcon-submission-v1",
-  "model": "resnet50-ibn-a-bnneck-gem-v1",
+  "model": "clip-vit-b16-bnneck-v1 + clip-vit-b16-bnneck-v1 + resnet50-ibn-a-bnneck-gem-v1",
   "queries": 1110,
   "gallery": 750,
-  "embedding_dim": 4096,
+  "embedding_dim": 3584,
   "embeddings_dtype": "float32",
-  "threshold": 0.4925,
-  "accepted_queries": 1007,
-  "refused_queries": 103,
-  "refusal_rate": 0.0928,
+  "threshold": 0.525,
+  "accepted_queries": 1046,
+  "refused_queries": 64,
+  "refusal_rate": 0.0577,
   "reranking": {
     "enabled": false,
     "method": "k-reciprocal, потоково-совместимый (без связей query-query)",
@@ -20,8 +20,8 @@
   "confidence_definition": "косинусное сходство эмбеддингов, не калиброванная вероятность; переранжирование, если включено, меняет только порядок",
   "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
   "checksums": {
-    "submission.csv": "fa6a682f8d9885523e3c4a3006c3c50e2218a310c41fb027d04e1277b87eaff9",
-    "candidates.csv": "e241f6e019092523f2af4176e956fa014da686acc5b1fe0a0bc1c0b2e0bbdba5",
-    "embeddings.npy": "644ccddbb2bd03ac1deaf0d6e238286f6c9aac7e8b0e881fdbaa2201d9891e08"
+    "submission.csv": "ee7d51cd20f73cf8b6f82efb5a20aa3636c61c21c623b612fca0ef33ad313398",
+    "candidates.csv": "ed78ebd0d9a99778e1fbffc784c6a32da341574806dffb93438aba5e877784c6",
+    "embeddings.npy": "e69cba5c8c09166ebaaa626a4f30d69505bc672811cda70abde2ae3c480de5e5"
   }
 }

@@ -51,12 +51,13 @@ services:
       FALCON_DATABASE_DSN: postgresql://falcon:${FALCON_DB_PASSWORD:-falcon-local-demo}@postgres:5432/falcon
       # Тот же ансамбль, что идёт в сдачу: порог откалиброван под этот состав
       # моделей и на одиночную модель не переносится.
-      FALCON_CHECKPOINTS: /opt/falcon/models/model-a.pt,/opt/falcon/models/model-b.pt
+      FALCON_CHECKPOINTS: /opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-veri-ours.pt,/opt/falcon/models/resnet-v2-veri.pt
       FALCON_DEVICE: cuda
       # Порог отказа, откалиброванный на локальном сплите под этот ансамбль по
       # баллу 0.7*F1 + 0.3*TNR эталонного скрипта организаторов
       # (CALIBRATED_THRESHOLD в falcon/submit.py, проверка — verify_official.py).
-      FALCON_MATCH_THRESHOLD: "0.4925"
+      FALCON_MATCH_THRESHOLD: "0.525"
+      FALCON_FLIP_TTA: "false"
       # Пусто — доступ без ключа (для проверки одной командой).
       FALCON_API_KEY: ${FALCON_API_KEY:-}
       HOME: /tmp

@@ -37,7 +37,17 @@ from .metrics import TOP_K, l2_normalize
 from .rerank import build_gallery_index, rerank_query
 
 
-# Порог отказа ансамбля из сдачи (models/model-a.pt + models/model-b.pt).
+# Состав сдачи: две модели CLIP ViT-B/16 (на конкурсных данных и после VeRi-776)
+# и ResNet50-IBN-a после VeRi-776, без отражения кадра. Выбор по баллам
+# точности, кандидатов и скорости — scripts/compare_ensembles.py, отчёт
+# docs/ensemble_choice.json. Отражение удваивает вычисления, а даёт лишь
+# +0.003 mAP@10: без него 143 кадра/с и 31 мс на RTX 3060 Laptop при порогах
+# полного балла 100 кадров/с и 40 мс.
+SUBMISSION_CHECKPOINTS = ("models/clip-ours.pt", "models/clip-veri-ours.pt",
+                          "models/resnet-v2-veri.pt")
+SUBMISSION_FLIP_TTA = False
+
+# Порог отказа этого ансамбля.
 #
 # Подобран на локальном сплите (890 запросов, 20% без пары — как в закрытом
 # тесте) по баллу режима кандидатов 0.7·F1 + 0.3·TNR, посчитанному ЭТАЛОННЫМ
@@ -45,9 +55,9 @@ from .rerank import build_gallery_index, rerank_query
 # а максимум после сглаживания окном ±0.01: TNR считается всего по 182 запросам
 # без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
 #
-# Прежний порог 0.411 выбирался под худшее из двух толкований F1 (засчитывается
-# ли та же машина с той же камеры). Эталонный скрипт снял вопрос: засчитывается.
-CALIBRATED_THRESHOLD = 0.4925
+# Порог калибруется под состав моделей: у ансамбля двух ResNet он был 0.4925,
+# у ансамбля с CLIP сходства в целом выше, и порог сдвинулся к 0.525.
+CALIBRATED_THRESHOLD = 0.525
 
 
 @dataclass

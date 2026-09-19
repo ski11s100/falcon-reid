@@ -22,6 +22,14 @@ python-multipart==0.0.32
 # Swagger UI из локальных файлов: /docs работает без интернета
 swagger-ui-bundle==1.1.0
 
+# CLIP ViT-B/16 — вторая архитектура ансамбля, строится через timm. Веса
+# берутся из нашего чекпойнта (pretrained=False): в сеть при запуске не ходим,
+# в образе к тому же HF_HUB_OFFLINE=1. Зависимости timm зафиксированы явно.
+timm==1.0.29
+huggingface_hub==1.32.0
+safetensors==0.8.0
+PyYAML==6.0.3
+
 # Приближённый поиск для демонстрации масштабируемости (docs/SCALABILITY.md)
 faiss-cpu==1.15.1
 

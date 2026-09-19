@@ -40,7 +40,7 @@ from falcon.metrics import (  # noqa: E402
     l2_normalize,
     rank_from_embeddings,
 )
-from falcon.submit import CALIBRATED_THRESHOLD  # noqa: E402
+from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA  # noqa: E402
 
 
 def load_official():
@@ -62,14 +62,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Сверка с эталонным скриптом организаторов")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--checkpoints", type=Path, nargs="+",
-                        default=[ROOT / "models" / "model-a.pt", ROOT / "models" / "model-b.pt"])
+                        default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "official_check.json")
     args = parser.parse_args()
 
     official = load_official()
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=42)
-    extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True))
+    extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
+                                                                  flip_tta=SUBMISSION_FLIP_TTA))
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
 
@@ -101,7 +102,7 @@ def main() -> None:
     always = official.candidate_metrics(q_df, g_df, candidates(-1.0))
     never = official.candidate_metrics(q_df, g_df, {})
 
-    grid = np.round(np.arange(0.38, 0.58, 0.0025), 4)
+    grid = np.round(np.arange(0.40, 0.80, 0.0025), 4)
     curve = np.array([score(official.candidate_metrics(q_df, g_df, candidates(t))) for t in grid])
     window = 9
     smooth = np.convolve(curve, np.ones(window) / window, mode="same")

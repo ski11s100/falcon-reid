@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from falcon.data import build_local_split, load_crop, read_manifest  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import l2_normalize  # noqa: E402
-from falcon.submit import CALIBRATED_THRESHOLD  # noqa: E402
+from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA  # noqa: E402
 
 THRESHOLD = CALIBRATED_THRESHOLD
 TILE = (220, 150)
@@ -107,12 +107,13 @@ def main() -> None:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "error_analysis")
     parser.add_argument("--checkpoints", type=Path, nargs="+",
-                        default=[ROOT / "models" / "model-a.pt", ROOT / "models" / "model-b.pt"])
+                        default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
     args = parser.parse_args()
 
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=42)
-    extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True))
+    extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
+                                                                  flip_tta=SUBMISSION_FLIP_TTA))
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
     scores = query @ gallery.T
