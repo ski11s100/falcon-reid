@@ -395,7 +395,8 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
     embedding = embed(extractor, crop)
 
     excluded = set(request.exclude_image_ids)
-    found = repository.search(embedding, EXPANSION_POOL + len(excluded))
+    pool = max(EXPANSION_POOL, request.top_k) + len(excluded)
+    found = repository.search(embedding, pool)
     found = [m for m in found if m.image_id not in excluded]
     found = expand_query(found, embedding, repository)[:request.top_k]
     candidates = [to_candidate(m, repository) for m in found]
