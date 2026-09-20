@@ -19,7 +19,7 @@ import shutil
 import statistics
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -216,6 +216,11 @@ class FeatureExtractor:
             if checkpoint is None:
                 raise ValueError("Нужен либо checkpoint, либо готовая модель")
             self.model, self.metadata = load_checkpoint(checkpoint)
+            # Препроцессинг должен совпадать с обучением до пикселя, поэтому
+            # размер кропа берётся из чекпойнта, а не из настроек по умолчанию.
+            trained_size = (self.metadata.get("preprocessing") or {}).get("size")
+            if trained_size and tuple(trained_size) != tuple(self.config.size):
+                self.config = replace(self.config, size=tuple(trained_size))
 
         self.model.eval().to(self.device)
 
@@ -528,6 +533,12 @@ class EnsembleExtractor:
         if len(self.weights) != len(self.members):
             raise ValueError("Число весов не совпадает с числом моделей")
 
+        sizes = {tuple(m.config.size) for m in self.members}
+        if len(sizes) > 1:
+            raise ValueError(
+                f"Модели ансамбля обучены на разных размерах входа: {sorted(sizes)}. "
+                "Кадр читается один раз на все модели, поэтому размер должен совпадать.")
+
         first = self.members[0]
         self.config = first.config
         self.device = first.device
@@ -617,7 +628,8 @@ def build_extractor(checkpoints: list[Path | str], config: ExtractorConfig | Non
         return FeatureExtractor(checkpoint=checkpoints[0], config=config)
     return EnsembleExtractor(checkpoints, weights=weights, config=config, projection=projection)
 
-def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None = None) -> Path:
+def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None = None,
+                    size: tuple[int, int] = DEFAULT_SIZE) -> Path:
     """Сохраняет веса вместе с описанием препроцессинга.
 
     Препроцессинг пишется в чекпоинт намеренно: рассогласование обучения и
@@ -631,7 +643,7 @@ def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None 
         "model": model.state_dict(),
         "num_classes": model.num_classes,
         "feature_dim": model.feature_dim,
-        "preprocessing": {"size": list(DEFAULT_SIZE), "normalize": "imagenet", "interpolation": "bicubic"},
+        "preprocessing": {"size": list(size), "normalize": "imagenet", "interpolation": "bicubic"},
         "metadata": metadata or {},
     }, path)
     return path
@@ -676,7 +688,11 @@ def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
     # то есть файл весов был бы готовым вектором атаки на сервер.
     state = torch.load(path, map_location="cpu", weights_only=True)
     # Архитектура записана в чекпоинт; неизвестная — ошибка с понятным текстом.
+    # Размер входа берётся из самого чекпойнта: у ViT позиционные эмбеддинги
+    # привязаны к числу патчей, и модель, обученная на 288, не соберётся под 256.
+    size = tuple(state.get("preprocessing", {}).get("size") or DEFAULT_SIZE)
     model = build_for_checkpoint(state.get("architecture"), state.get("num_classes", 0),
-                                 state.get("feature_dim", 2048))
+                                 state.get("feature_dim", 2048), img_size=size[0])
     model.load_state_dict(state["model"], strict=True)
-    return model, {**state.get("metadata", {}), "preprocessing": state.get("preprocessing")}
+    return model, {**state.get("metadata", {}),
+                   "preprocessing": state.get("preprocessing", {"size": list(size)})}

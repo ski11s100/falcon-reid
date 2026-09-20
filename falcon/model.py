@@ -391,19 +391,25 @@ ARCHITECTURES = {
 
 
 def build_named(name: str, num_classes: int = 0, pretrained: bool = True,
-                embedding_dim: int = 2048, verbose: bool = True) -> nn.Module:
-    """Модель по короткому имени архитектуры: resnet50-ibn | clip-vit-b16."""
+                embedding_dim: int = 2048, verbose: bool = True,
+                img_size: int = 256) -> nn.Module:
+    """Модель по короткому имени архитектуры: resnet50-ibn | clip-vit-b16.
+
+    img_size важен только для ViT: у него позиционные эмбеддинги привязаны к
+    числу патчей. Свёрточная сеть работает с любым размером входа.
+    """
     if name == "clip-vit-b16":
-        return ViTReID(num_classes=num_classes, pretrained=pretrained)
+        return ViTReID(num_classes=num_classes, pretrained=pretrained, img_size=img_size)
     if name == "resnet50-ibn":
         return build_model(num_classes=num_classes, embedding_dim=embedding_dim,
                            pretrained=pretrained, verbose=verbose)
     raise ValueError(f"Неизвестная архитектура {name!r}")
 
 
-def build_for_checkpoint(architecture: str, num_classes: int, feature_dim: int) -> nn.Module:
+def build_for_checkpoint(architecture: str, num_classes: int, feature_dim: int,
+                         img_size: int = 256) -> nn.Module:
     """Пустая модель под чекпоинт: без загрузки предобученных весов и без сети."""
     if architecture not in ARCHITECTURES:
         raise ValueError(f"Чекпоинт собран неизвестной архитектурой: {architecture!r}")
-    return build_named(ARCHITECTURES[architecture], num_classes=num_classes,
+    return build_named(ARCHITECTURES[architecture], num_classes=num_classes, img_size=img_size,
                        pretrained=False, embedding_dim=feature_dim, verbose=False)

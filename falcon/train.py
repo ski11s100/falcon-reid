@@ -65,7 +65,7 @@ class TrainConfig:
     center_weight: float = 0.0005
     label_smoothing: float = 0.1
     embedding_dim: int = 2048
-    size: tuple[int, int] = DEFAULT_SIZE
+    size: tuple[int, int] = DEFAULT_SIZE   # --input-size меняет обе стороны
     num_workers: int = 4
     amp: bool = True
     seed: int = 42
@@ -278,15 +278,26 @@ def load_transferred_weights(model, checkpoint: Path, verbose: bool = True) -> d
     state = state.get("model", state)
     current = model.state_dict()
 
-    accepted, rejected = {}, []
+    accepted, rejected, resized = {}, [], []
     for key, value in state.items():
-        if key in current and current[key].shape == value.shape:
+        if key not in current:
+            rejected.append(key)
+        elif current[key].shape == value.shape:
             accepted[key] = value
+        elif key.endswith("pos_embed") and value.ndim == 3:
+            # Смена разрешения у ViT: позиционные эмбеддинги растягиваются на
+            # новое число патчей, а не выбрасываются. Иначе модель, обученная
+            # на 256, теряла бы всё пространственное знание при переходе на 288.
+            from timm.layers import resample_abs_pos_embed
+            patches = current[key].shape[1] - 1
+            side = int(round(patches ** 0.5))
+            accepted[key] = resample_abs_pos_embed(value, [side, side], num_prefix_tokens=1)
+            resized.append(key)
         else:
             rejected.append(key)
 
     model.load_state_dict(accepted, strict=False)
-    report = {"transferred": len(accepted), "skipped": rejected,
+    report = {"transferred": len(accepted), "skipped": rejected, "resized": resized,
               "source": str(checkpoint)}
     if verbose:
         print(json.dumps({"transfer": report}, ensure_ascii=False), flush=True)
@@ -332,7 +343,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     # Без resume backbone инициализируется весами ImageNet+IBN. С resume поверх
     # них ложится предобучение на стороннем наборе — ImageNet скачивать не нужно.
     model = build_named(config.architecture, num_classes=len(labels),
-                        pretrained=resume is None, embedding_dim=config.embedding_dim)
+                        pretrained=resume is None, embedding_dim=config.embedding_dim,
+                        img_size=config.size[0])
     if resume is not None:
         load_transferred_weights(model, resume)
     model.set_gradient_checkpointing(config.grad_checkpointing)
@@ -467,7 +479,7 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             current = record["validation"]["mAP@10"]
             if current > best_map:
                 best_map = current
-                save_checkpoint(model, output_dir / "best.pt", metadata={
+                save_checkpoint(model, output_dir / "best.pt", size=config.size, metadata={
                     "epoch": epoch, "validation": record["validation"],
                     "dataset_audit": dataset_audit, "split": split.summary(),
                     "config": asdict(config),
@@ -487,7 +499,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
         })
 
-    save_checkpoint(model, output_dir / "last.pt", metadata={"epoch": config.epochs})
+    save_checkpoint(model, output_dir / "last.pt", size=config.size,
+                    metadata={"epoch": config.epochs})
     # Обучение завершено, продолжать нечего, а 300 МБ состояния на модель лишние.
     state_path.unlink(missing_ok=True)
     return {"best_mAP@10": best_map, "epochs": config.epochs, "output": str(output_dir)}
@@ -506,6 +519,8 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--input-size", type=int, default=DEFAULT_SIZE[0],
+                        help="Сторона квадратного входа: 256 в базовом рецепте, 288 — мелкие детали")
     parser.add_argument("--plate-erase", type=float, default=0.0,
                         help="Доля кадров с закрашенной зоной номера при обучении")
     parser.add_argument("--no-amp", action="store_true")
@@ -539,6 +554,7 @@ def main() -> None:
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
         plate_erase=args.plate_erase,
+        size=(args.input_size, args.input_size),
     )
     result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
                    csv_path=args.csv, images_dir=args.images)
