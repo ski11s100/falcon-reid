@@ -24,6 +24,8 @@ const state = {
   lastSearch: null,     // ответ /api/search вместе с тем, что искали
   explainCache: new Map(),
   view: "vehicles",     // «по машинам» или «все снимки»
+  exclude: [],          // снимки галереи, которые не показывать (запрос взят из галереи)
+  gallery: [],          // сводка галереи: машины и их свежие снимки
   history: [],          // недавние запросы этого сеанса
 };
 
@@ -128,14 +130,17 @@ function readAsDataUrl(file) {
   });
 }
 
-async function loadFrame(file) {
+/* Кадр-запрос. exclude — снимки галереи, которых не должно быть в выдаче:
+ * когда запросом служит снимок из самой галереи, первым кандидатом был бы он. */
+async function loadFrame(file, { exclude = [] } = {}) {
   if (!file || !file.type.startsWith("image/")) {
     toast("Нужен снимок в формате JPEG, PNG или WEBP");
     return;
   }
   const dataUrl = await readAsDataUrl(file);
   const image = $("frame-image");
-  image.onload = () => {
+  state.exclude = exclude;
+  await new Promise((resolve) => { image.onload = () => {
     state.dataUrl = dataUrl;
     state.fileName = file.name || "кадр из буфера";
     state.width = image.naturalWidth;
@@ -147,9 +152,43 @@ async function loadFrame(file) {
     setBBox(null);
     $("btn-search").disabled = false;
     $("btn-register").disabled = false;
+    markStep(2);
     onScene((city) => city.setQuery(true));
-  };
-  image.src = dataUrl;
+    resolve();
+  }; image.src = dataUrl; });
+}
+
+/* Подсветка текущего шага в подсказке «как пользоваться». */
+function markStep(step) {
+  document.querySelectorAll(".steps__item").forEach((item) => {
+    const n = Number(item.dataset.step);
+    item.classList.toggle("steps__item--done", n < step);
+    item.classList.toggle("steps__item--current", n === step);
+  });
+}
+
+/* Найти машину из галереи на других камерах: её снимок становится запросом,
+ * сам снимок исключается из выдачи. */
+async function searchFromGallery(vehicle) {
+  if (!vehicle?.thumbnail) return;
+  try {
+    await loadFrame(dataUrlToFile(vehicle.thumbnail, `${vehicle.vehicle_id} из галереи.jpg`),
+                    { exclude: vehicle.image_id ? [vehicle.image_id] : [] });
+    // Снимок галереи — уже вырезанная машина: рамка на весь снимок.
+    setBBox({ x: 0, y: 0, w: state.width, h: state.height });
+    await search();
+  } catch (error) {
+    toast(`Не удалось взять снимок из галереи: ${error.message}`);
+  }
+}
+
+/* Data URL -> File без fetch: политика CSP (connect-src 'self') запрещает
+ * запросы к data:, и это правильно, поэтому байты раскодируются на месте. */
+function dataUrlToFile(dataUrl, name) {
+  const [head, body] = dataUrl.split(",", 2);
+  const type = /^data:([^;,]+)/.exec(head)?.[1] || "image/jpeg";
+  const bytes = Uint8Array.from(atob(body), (char) => char.charCodeAt(0));
+  return new File([bytes], name, { type });
 }
 
 function resetFrame() {
@@ -163,6 +202,8 @@ function resetFrame() {
   $("btn-search").disabled = true;
   $("btn-register").disabled = true;
   $("file").value = "";
+  state.exclude = [];
+  markStep(1);
   onScene((city) => city.setQuery(false));
 }
 
@@ -179,6 +220,30 @@ const drop = $("drop");
 }));
 drop.addEventListener("drop", (event) => {
   event.preventDefault();
+  event.stopPropagation();
+  dragDepth = 0;
+  $("drop-overlay").hidden = true;
+  loadFrame(event.dataTransfer.files[0]);
+});
+
+// Кадр можно бросить в любое место окна, а не только в поле слева.
+let dragDepth = 0;
+const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragenter", (event) => {
+  if (!hasFiles(event)) return;
+  dragDepth += 1;
+  $("drop-overlay").hidden = false;
+});
+window.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) $("drop-overlay").hidden = true;
+});
+window.addEventListener("dragover", (event) => { if (hasFiles(event)) event.preventDefault(); });
+window.addEventListener("drop", (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  $("drop-overlay").hidden = true;
   loadFrame(event.dataTransfer.files[0]);
 });
 drop.addEventListener("keydown", (event) => {
@@ -208,6 +273,7 @@ function setBBox(box) {
     $(id).value = box ? Math.round([box.x, box.y, box.w, box.h][i]) : "";
   });
   drawBBox(box);
+  if (state.dataUrl) markStep(box ? 3 : 2);
 }
 
 function drawBBox(box) {
@@ -262,6 +328,7 @@ window.addEventListener("resize", () => drawBBox(readBBox()));
 
 function payload(extra = {}) {
   const body = { image_base64: state.dataUrl, ...extra };
+  if (state.exclude.length && "top_k" in extra) body.exclude_image_ids = state.exclude;
   const bbox = readBBox();
   if (bbox) body.bbox = bbox;
   return body;
@@ -808,16 +875,20 @@ async function loadGallery() {
   try {
     const data = await call("GET", "/api/gallery?limit=60");
     const vehicles = data.vehicles || [];
+    state.gallery = vehicles;
+    $("try-example").hidden = !vehicles.some((v) => v.thumbnail);
     $("gallery-count").textContent = `${vehicles.length} ${plural(vehicles.length, "машина", "машины", "машин")} · `
       + `${data.size} ${plural(data.size, "снимок", "снимка", "снимков")}`;
-    $("gallery-grid").innerHTML = vehicles.length ? vehicles.map((v) => `
-      <button type="button" class="gallery-card" data-vehicle="${escapeHtml(v.vehicle_id)}"
-          title="Добавлять новые кадры к ${escapeHtml(v.vehicle_id)}">
+    $("gallery-grid").innerHTML = vehicles.length ? vehicles.map((v, index) => `
+      <div class="gallery-card" role="button" tabindex="0" data-gallery="${index}"
+          title="Найти ${escapeHtml(v.vehicle_id)} на других камерах">
         ${v.thumbnail ? `<img class="gallery-card__image" src="${v.thumbnail}" alt="">`
                       : '<span class="gallery-card__image"></span>'}
         <span class="gallery-card__id">${escapeHtml(v.vehicle_id)}</span>
         <span class="gallery-card__count">${v.shots}</span>
-      </button>`).join("")
+        <button type="button" class="gallery-card__use" data-use="${index}"
+            title="Подставить ${escapeHtml(v.vehicle_id)}, чтобы добавить новый кадр">ID</button>
+      </div>`).join("")
       : '<p class="section-hint">Пока пусто. Загрузите снимки пачкой: ID машины берётся из имени файла.</p>';
   } catch (error) {
     $("gallery-grid").innerHTML = `<p class="section-hint">${escapeHtml(error.message)}</p>`;
@@ -825,12 +896,31 @@ async function loadGallery() {
 }
 
 $("gallery-grid").addEventListener("click", (event) => {
-  const card = event.target.closest("[data-vehicle]");
-  if (!card) return;
-  $("vehicle").value = card.dataset.vehicle;
-  $("vehicle").focus();
-  toast(state.dataUrl ? `Текущий кадр будет добавлен к ${card.dataset.vehicle} — нажмите «Добавить»`
-                      : `Загрузите кадр, и его можно будет добавить к ${card.dataset.vehicle}`);
+  const use = event.target.closest("[data-use]");
+  if (use) {
+    const id = state.gallery[Number(use.dataset.use)].vehicle_id;
+    $("vehicle").value = id;
+    $("vehicle").focus();
+    toast(state.dataUrl ? `Текущий кадр будет добавлен к ${id} — нажмите «Добавить»`
+                        : `Загрузите кадр, и его можно будет добавить к ${id}`);
+    return;
+  }
+  const card = event.target.closest("[data-gallery]");
+  if (card) searchFromGallery(state.gallery[Number(card.dataset.gallery)]);
+});
+$("gallery-grid").addEventListener("keydown", (event) => {
+  const card = event.target.closest("[data-gallery]");
+  if (card && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    searchFromGallery(state.gallery[Number(card.dataset.gallery)]);
+  }
+});
+
+// Пример для первого знакомства: машина, снятая большим числом камер.
+$("try-example").addEventListener("click", () => {
+  const withShots = state.gallery.filter((v) => v.thumbnail).sort((a, b) => b.shots - a.shots);
+  const pick = withShots[Math.floor(Math.random() * Math.min(4, withShots.length))];
+  if (pick) searchFromGallery(pick);
 });
 
 /* ---------- Прочее ---------- */
@@ -848,4 +938,5 @@ function escapeHtml(value) {
 
 refreshStatus();
 loadGallery();
+markStep(1);
 setInterval(refreshStatus, 15000);

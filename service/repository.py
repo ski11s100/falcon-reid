@@ -228,13 +228,16 @@ class PgVectorRepository:
                 f"""SELECT g.vehicle_id, count(*) AS shots, max(g.created_at) AS last_seen,
                            (SELECT t.thumbnail FROM {self.table} t
                              WHERE t.vehicle_id = g.vehicle_id AND t.thumbnail IS NOT NULL
+                             ORDER BY t.created_at DESC LIMIT 1),
+                           (SELECT t.image_id FROM {self.table} t
+                             WHERE t.vehicle_id = g.vehicle_id AND t.thumbnail IS NOT NULL
                              ORDER BY t.created_at DESC LIMIT 1)
                     FROM {self.table} g WHERE g.vehicle_id IS NOT NULL
                     GROUP BY g.vehicle_id ORDER BY last_seen DESC LIMIT %s""",
                 (limit,),
             )
             return [{"vehicle_id": r[0], "shots": int(r[1]), "last_seen": r[2].isoformat(),
-                     "thumbnail": bytes(r[3]) if r[3] is not None else None}
+                     "thumbnail": bytes(r[3]) if r[3] is not None else None, "image_id": r[4]}
                     for r in cursor.fetchall()]
 
     def close(self) -> None:
@@ -331,11 +334,14 @@ class SQLiteRepository:
                 """SELECT g.vehicle_id, count(*), max(g.created_at),
                           (SELECT t.thumbnail FROM gallery t
                             WHERE t.vehicle_id = g.vehicle_id AND t.thumbnail IS NOT NULL
+                            ORDER BY t.created_at DESC LIMIT 1),
+                          (SELECT t.image_id FROM gallery t
+                            WHERE t.vehicle_id = g.vehicle_id AND t.thumbnail IS NOT NULL
                             ORDER BY t.created_at DESC LIMIT 1)
                    FROM gallery g WHERE g.vehicle_id IS NOT NULL GROUP BY g.vehicle_id
                    ORDER BY max(g.created_at) DESC LIMIT ?""", (limit,)).fetchall()
         return [{"vehicle_id": r[0], "shots": int(r[1]), "last_seen": r[2],
-                 "thumbnail": r[3]} for r in rows]
+                 "thumbnail": r[3], "image_id": r[4]} for r in rows]
 
     def close(self) -> None:
         self.connection.close()

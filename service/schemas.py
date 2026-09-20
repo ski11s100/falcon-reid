@@ -72,6 +72,11 @@ class RegisterRequest(ImagePayload):
 
 class SearchRequest(ImagePayload):
     top_k: int = Field(default=10, ge=1, le=100, description="Сколько кандидатов вернуть")
+    exclude_image_ids: list[str] = Field(
+        default_factory=list, max_length=20,
+        description="Снимки галереи, которых не должно быть в выдаче. Интерфейс передаёт "
+                    "сюда снимок, взятый из галереи как запрос: иначе первым кандидатом "
+                    "был бы он сам со сходством 1.0")
     threshold: float | None = Field(
         default=None, ge=-1.0, le=1.0,
         description="Переопределить порог принятия решения для этого запроса (косинус, -1..1)",

@@ -143,9 +143,99 @@ button, input { font: inherit; color: inherit; }
   min-width: 0;
 }
 
-.result-empty { padding: 28px 10px; text-align: center; }
-.result-empty__title { margin: 0; font-size: 15px; font-weight: 800; }
+.result-empty { padding: 26px 10px 22px; text-align: center; }
+.result-empty__title { margin: 0; font-family: var(--display); font-size: 16px; font-weight: 600; }
 .result-empty__text { max-width: 560px; margin: 8px auto 0; color: var(--text-3); font-size: 13px; }
+.result-empty__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 16px; margin-top: 18px; }
+.result-empty__hint { color: var(--text-3); font-size: 12px; }
+
+/* Путь оператора: четыре шага, текущий подсвечен, пройденные отмечены. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+  text-align: left;
+}
+.steps__item {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 12px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.2s, background 0.2s;
+}
+.steps__item:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  width: 8px;
+  height: 1px;
+  background: var(--border-strong);
+}
+.steps__num {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 800;
+}
+.steps__text { color: var(--text-3); font-size: 12px; line-height: 1.35; }
+.steps__text b { display: block; margin-bottom: 2px; color: var(--text); font-size: 13px; }
+.steps__item--current { border-color: rgba(124, 196, 255, 0.55); background: rgba(124, 196, 255, 0.06); }
+.steps__item--current .steps__num { background: var(--cyan); color: #0a0f18; }
+.steps__item--done .steps__num { background: rgba(52, 201, 139, 0.18); color: var(--green); }
+.steps__item--done .steps__num::before { content: "✓"; }
+.steps__item--done .steps__num { font-size: 0; }
+.steps__item--done .steps__num::before { font-size: 13px; }
+@media (max-width: 900px) {
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps__item::after { display: none; }
+}
+
+.button.button--accent { width: auto; margin: 0; padding: 11px 24px; background: var(--cyan); color: #06121f; }
+.button.button--accent:hover:not(:disabled) { background: #a6d8ff; }
+
+.keys-hint { margin: 8px 2px 0; color: var(--text-3); font-size: 11px; line-height: 1.6; }
+kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text-2);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+/* Кадр можно бросить в любое место окна: пока файл над окном, видна рамка. */
+.drop-overlay {
+  position: fixed;
+  inset: 10px;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  border: 2px dashed rgba(124, 196, 255, 0.7);
+  border-radius: 18px;
+  background: rgba(7, 11, 19, 0.72);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.drop-overlay p { margin: 0; color: var(--cyan); font-family: var(--display); font-size: 20px; }
+.drop-overlay[hidden] { display: none; }
 
 /* ---------- Кадр запроса ---------- */
 
@@ -362,6 +452,9 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rg
   bottom: 14px;
   display: flex;
   gap: 14px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(9, 13, 21, 0.72);
   color: var(--text-3);
   font-size: 11px;
   pointer-events: none;
@@ -369,8 +462,32 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rg
 
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { display: inline-block; }
-.legend__camera { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
-.legend__car { width: 12px; height: 5px; border-radius: 1px; background: #aeb8cc; }
+/* Значки легенды повторяют рисунок на схеме: камера — белый корпус с объективом
+ * и жёлтым бейджем, машина — кузов со стёклами. */
+.legend__camera {
+  position: relative;
+  width: 11px;
+  height: 6px;
+  border-radius: 2px;
+  background: #e3e8f0;
+  box-shadow: 0 0 0 1.5px rgba(245, 181, 61, 0.6);
+}
+.legend__camera::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #18202e;
+}
+.legend__car {
+  width: 14px;
+  height: 7px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #c7cfdb 0 22%, #0e1624 22% 34%, #c7cfdb 34% 64%, #0e1624 64% 80%, #c7cfdb 80%);
+}
 .legend__target { width: 16px; height: 2px; background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
 
 .ticker {
@@ -528,7 +645,7 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rg
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   gap: 6px;
-  max-height: 260px;
+  max-height: 312px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -545,7 +662,24 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rg
   cursor: pointer;
 }
 
-.gallery-card:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, 0.06); }
+.gallery-card { cursor: pointer; }
+.gallery-card:hover, .gallery-card:focus-visible { border-color: rgba(124, 196, 255, 0.5); background: rgba(124, 196, 255, 0.06); }
+.gallery-card__use {
+  position: absolute;
+  bottom: 21px;
+  right: 7px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: rgba(7, 11, 19, 0.82);
+  color: var(--text-2);
+  font: 700 10px/16px var(--sans);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.gallery-card:hover .gallery-card__use, .gallery-card:focus-within .gallery-card__use { opacity: 1; }
+.gallery-card__use:hover { color: var(--text); border-color: var(--cyan); }
 .gallery-card__image { width: 100%; aspect-ratio: 4 / 3; border-radius: 5px; object-fit: cover; background: var(--inset); display: block; }
 .gallery-card__id { font-size: 11px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

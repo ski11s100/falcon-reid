@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI):
             ExtractorConfig(size=settings.size, batch_size=settings.batch_size,
                             num_workers=0, device=settings.device,
                             half=settings.half, flip_tta=settings.flip_tta),
+            projection=settings.projection if settings.projection and settings.projection.is_file() else None,
         )
         names = " + ".join(p.name for p in paths)
         state.model_name = (f"{state.extractor.metadata.get('architecture', 'falcon')} "
@@ -360,7 +361,9 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
     quality = assess_quality(crop)
     embedding = embed(extractor, crop)
 
-    found = repository.search(embedding, request.top_k)
+    excluded = set(request.exclude_image_ids)
+    found = repository.search(embedding, request.top_k + len(excluded))
+    found = [m for m in found if m.image_id not in excluded][:request.top_k]
     candidates = [to_candidate(m, repository) for m in found]
     query_fingerprint = fingerprint(embedding)
 
@@ -483,6 +486,12 @@ def explain_parts(extractor, reference: np.ndarray) -> list[tuple]:
     своей частью вектора, а карты усредняются: объяснение отражает весь ансамбль.
     """
     members = getattr(extractor, "members", None)
+    projection = getattr(extractor, "projection", None)
+    if projection is not None:
+        # В галерее лежат векторы после PCA-проекции. Grad-CAM сравнивает каждую
+        # модель со своей частью полного вектора, поэтому эталон сначала
+        # возвращается в полное пространство (приближённо, по главным компонентам).
+        reference = projection.back(reference)
     if not members:
         return [(extractor.explain_model, reference)]
     parts, offset = [], 0
@@ -554,6 +563,8 @@ def list_gallery(limit: int = 100,
                  repository: VectorRepository = Depends(require_repository)) -> dict:
     """Машины в галерее: число снимков и миниатюра самого свежего."""
     vehicles = repository.list_vehicles(max(1, min(limit, 500)))
+    # image_id — снимок, чья миниатюра показана: по нему интерфейс ищет машину
+    # на других камерах, исключая сам этот снимок из выдачи.
     for vehicle in vehicles:
         vehicle["thumbnail"] = as_data_url(vehicle.get("thumbnail"))
     return {"size": repository.count(), "vehicles": vehicles}

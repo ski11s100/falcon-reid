@@ -36,10 +36,10 @@
   </div>
 
   <div class="metrics" aria-label="Показатели решения">
-    <div class="metric"><b>0.746</b><span>mAP@10, отложенная выборка</span></div>
-    <div class="metric"><b>37 мс</b><span>на кадр, 3 модели</span></div>
-    <div class="metric"><b>126</b><span>кадров в секунду</span></div>
-    <div class="metric"><b id="m-dim">3 584</b><span>признаков в отпечатке</span></div>
+    <div class="metric"><b>0.757</b><span>mAP@10, отложенная выборка</span></div>
+    <div class="metric"><b>30 мс</b><span>на кадр, 3 модели</span></div>
+    <div class="metric"><b>131</b><span>кадр в секунду</span></div>
+    <div class="metric"><b id="m-dim">256</b><span>признаков в отпечатке</span></div>
     <div class="metric"><b id="m-gallery">—</b><span>снимков в галерее</span></div>
     <div class="metric"><b id="m-threshold">—</b><span>порог отказа</span></div>
     <div class="metric"><b id="m-last">—</b><span>последний поиск</span></div>
@@ -79,6 +79,7 @@
       </div>
 
       <button class="button" id="btn-search" disabled>Найти</button>
+      <p class="keys-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> — найти · <kbd>Ctrl</kbd>+<kbd>V</kbd> — вставить кадр · кадр можно бросить в любое место окна</p>
 
       <div class="gallery-tools">
         <div class="register" id="register">
@@ -106,7 +107,7 @@
         <span class="section-head__meta" id="gallery-count"></span>
       </header>
       <div class="gallery-grid" id="gallery-grid"></div>
-      <p class="section-hint">Щелчок по машине подставит её ID для добавления нового кадра.</p>
+      <p class="section-hint">Щелчок по машине — найти её на других камерах. «ID» подставит её номер в галерее, чтобы добавить новый кадр.</p>
     </section>
 
     </div>
@@ -114,8 +115,29 @@
     <!-- Результат поиска. До первого запроса — короткая подсказка. -->
     <section class="panel panel--result" id="result-panel" aria-label="Результат">
       <div class="result-empty" id="result-empty">
-        <p class="result-empty__title">Здесь появятся найденные снимки</p>
-        <p class="result-empty__text">Загрузите кадр слева, обведите машину и нажмите «Найти». Сервис покажет десять самых похожих снимков из галереи или честно откажется, если уверенного совпадения нет. На схеме сверху найденные снимки появятся у камер.</p>
+        <p class="result-empty__title">Найти машину на других камерах — без номера</p>
+        <ol class="steps" aria-label="Как пользоваться">
+          <li class="steps__item" data-step="1">
+            <span class="steps__num">1</span>
+            <span class="steps__text"><b>Кадр с камеры</b>перетащите, вставьте Ctrl+V или выберите файл</span>
+          </li>
+          <li class="steps__item" data-step="2">
+            <span class="steps__num">2</span>
+            <span class="steps__text"><b>Рамка вокруг машины</b>обведите мышью прямо на кадре</span>
+          </li>
+          <li class="steps__item" data-step="3">
+            <span class="steps__num">3</span>
+            <span class="steps__text"><b>«Найти»</b>десять похожих снимков или честный отказ</span>
+          </li>
+          <li class="steps__item" data-step="4">
+            <span class="steps__num">4</span>
+            <span class="steps__text"><b>Сравнение</b>снимок рядом с запросом и карта внимания</span>
+          </li>
+        </ol>
+        <div class="result-empty__actions">
+          <button type="button" class="button button--accent" id="try-example" hidden>Попробовать на примере</button>
+          <span class="result-empty__hint" id="try-example-hint">Пример — снимок машины из галереи: сервис найдёт её на других камерах.</span>
+        </div>
       </div>
       <div id="result-body" hidden>
       <div class="result-head">
@@ -180,6 +202,9 @@
 
 <div class="toast" id="toast" role="status" hidden></div>
 
+<div class="drop-overlay" id="drop-overlay" hidden>
+  <p>Отпустите, чтобы загрузить кадр</p>
+</div>
 <script src="/static/city.js"></script>
 <script src="/static/app.js"></script>
 </body>
