@@ -29,7 +29,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 from falcon.calibrate import calibrate  # noqa: E402
 from falcon.data import audit, build_local_split, read_manifest  # noqa: E402
@@ -43,8 +44,11 @@ from falcon.metrics import (  # noqa: E402
     rank_from_embeddings,
 )
 from falcon.submit import (  # noqa: E402
+    SUBMISSION_FLIP_TTA,
+    SUBMISSION_PROJECTION,
     SubmissionConfig,
     build_ranking,
+    enrich_vectors,
     validate_submission,
     write_submission,
 )
@@ -91,14 +95,21 @@ def step_train(dataset: Path, output: Path, config: TrainConfig, device: str,
     return checkpoint
 
 
-def local_vectors(checkpoints: list[Path], dataset: Path, seed: int, device: str, workers: int):
-    """Эмбеддинги локального сплита: нужны и для калибровки, и для A/B re-rank."""
+def local_vectors(checkpoints: list[Path], dataset: Path, seed: int, device: str, workers: int,
+                  projection: Path | None):
+    """Эмбеддинги локального сплита: нужны и для калибровки, и для A/B re-rank.
+
+    Настройки те же, что в сдаче (falcon/submit.py): без отражения кадра и с
+    PCA-проекцией. Иначе цикл считал бы метрики другой конфигурации, а не той,
+    что уходит организаторам.
+    """
     rows = read_manifest(dataset / "train.csv", dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=seed)
     extractor = build_extractor(
         checkpoints,
         ExtractorConfig(batch_size=64, num_workers=workers, device=device,
-                        half=True, flip_tta=True),
+                        half=True, flip_tta=SUBMISSION_FLIP_TTA),
+        projection=projection,
     )
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
     query = l2_normalize(extractor.extract(split.query, progress=False))
@@ -224,7 +235,8 @@ def step_plate_check(split, extractor, output: Path) -> dict:
 
 
 def step_submit(dataset: Path, checkpoints: list[Path], output: Path, threshold: float | None,
-                rerank: dict, device: str, workers: int, benchmark: bool) -> dict:
+                rerank: dict, device: str, workers: int, benchmark: bool,
+                projection: Path | None) -> dict:
     stage("7. Файлы сдачи")
     queries = read_manifest(dataset / "test_query.csv", dataset / "images")
     gallery = read_manifest(dataset / "test_gallery.csv", dataset / "images")
@@ -232,11 +244,11 @@ def step_submit(dataset: Path, checkpoints: list[Path], output: Path, threshold:
     extractor = build_extractor(
         checkpoints,
         ExtractorConfig(batch_size=32, num_workers=workers, device=device,
-                        half=True, flip_tta=True),
+                        half=True, flip_tta=SUBMISSION_FLIP_TTA),
+        projection=projection,
     )
     query_vectors = extractor.extract(queries)
     gallery_vectors = extractor.extract(gallery)
-    embeddings = np.vstack([query_vectors, gallery_vectors]).astype(np.float32)
 
     recommended = rerank.get("recommended") or {}
     config = SubmissionConfig(
@@ -246,6 +258,10 @@ def step_submit(dataset: Path, checkpoints: list[Path], output: Path, threshold:
         k2=recommended.get("k2", 6),
         lambda_value=recommended.get("lambda", 0.3),
     )
+    # В embeddings.npy идут те же векторы, по которым построено ранжирование,
+    # — обогащённые соседями, как в scripts/run_submission.py.
+    enriched_queries, enriched_gallery = enrich_vectors(query_vectors, gallery_vectors, config)
+    embeddings = np.vstack([enriched_queries, enriched_gallery]).astype(np.float32)
     indices, scores = build_ranking(query_vectors, gallery_vectors, config)
     submission_dir = output / "submission"
     if submission_dir.exists():
@@ -282,6 +298,8 @@ def main() -> None:
                         help="Готовые веса: обучение пропускается. Несколько — ансамбль")
     parser.add_argument("--resume", type=Path,
                         help="Чекпоинт предобучения; классификатор не переносится")
+    parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
+                        help="PCA-проекция вектора ансамбля; --projection none — без неё")
     args = parser.parse_args()
 
     for name in ("train.csv", "test_query.csv", "test_gallery.csv"):
@@ -307,8 +325,12 @@ def main() -> None:
         checkpoints = [step_train(args.dataset, args.output, config, args.device,
                                   resume=args.resume)]
 
+    projection = None if str(args.projection).lower() == "none" else args.projection
+    if projection is not None and not Path(projection).is_file():
+        parser.error(f"Не найдена проекция {projection} (--projection none — считать без неё)")
+
     split, query, gallery, extractor = local_vectors(
-        checkpoints, args.dataset, args.seed, args.device, args.workers)
+        checkpoints, args.dataset, args.seed, args.device, args.workers, projection)
 
     validation = step_validate(split, query, gallery, args.output)
     calibration = step_calibrate(split, query, gallery, args.output)
@@ -317,7 +339,7 @@ def main() -> None:
 
     threshold = calibration["selected"]["threshold"]
     result = step_submit(args.dataset, checkpoints, args.output, threshold, rerank,
-                         args.device, args.workers, not args.skip_benchmark)
+                         args.device, args.workers, not args.skip_benchmark, projection)
 
     stage("Итог")
     summary = {
