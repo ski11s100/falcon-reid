@@ -82,7 +82,13 @@ async function call(method, path, body, retried = false) {
   try { data = await response.json(); } catch { /* пустой ответ */ }
   if (!response.ok) {
     const detail = data && data.detail;
-    throw new Error(typeof detail === "string" ? detail : `Ошибка сервиса (${response.status})`);
+    if (typeof detail === "string") throw new Error(detail);
+    // 502/503 от прокси означает, что контейнер api ещё не поднялся или
+    // остановлен: у оператора должно быть понятное действие, а не голый код.
+    if (response.status === 502 || response.status === 503) {
+      throw new Error("Сервис распознавания не отвечает. Подождите запуска или проверьте контейнер api");
+    }
+    throw new Error(`Ошибка сервиса (${response.status})`);
   }
   return data;
 }
