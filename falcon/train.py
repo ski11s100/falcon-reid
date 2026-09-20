@@ -35,12 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from falcon.data import Observation, PKSampler, audit, build_local_split, read_manifest  # noqa: E402
 from falcon.extract import (  # noqa: E402
-    USE_THREADS,
     CropDataset,
     ExtractorConfig,
     FeatureExtractor,
-    ThreadedBatchLoader,
-    _camera_code,
     save_checkpoint,
 )
 from falcon.losses import ReIDCriterion  # noqa: E402

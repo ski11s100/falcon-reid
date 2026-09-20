@@ -5,3 +5,5 @@
 pandas==3.0.6
 # Поиск известных уязвимостей в зависимостях: pip-audit -r requirements.txt
 pip-audit==2.10.1
+# Линтер: ruff check . (настройки и причины отключений — ruff.toml)
+ruff==0.14.5

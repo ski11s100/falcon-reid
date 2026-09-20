@@ -59,7 +59,8 @@ def _resolve_image(root: Path, image_id: str) -> Path:
     raise FileNotFoundError(f"Не найден файл кадра для image_id={image_id!r}")
 
 
-def read_manifest(csv_path: Path | str, images_dir: Path | str, *, require_labels: bool = False) -> list[Observation]:
+def read_manifest(csv_path: Path | str, images_dir: Path | str, *,
+                  require_labels: bool = False) -> list[Observation]:
     """Читает конкурсный CSV в список наблюдений с проверкой целостности."""
     csv_path, root = Path(csv_path), Path(images_dir).resolve()
     rows: list[Observation] = []

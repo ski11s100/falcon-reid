@@ -56,7 +56,7 @@ class GradCAM:
         self._gradients: torch.Tensor | None = None
         self._handles: list = []
 
-    def __enter__(self) -> "GradCAM":
+    def __enter__(self) -> GradCAM:
         self._handles.append(self.layer.register_forward_hook(self._save_activations))
         self._handles.append(self.layer.register_full_backward_hook(self._save_gradients))
         return self

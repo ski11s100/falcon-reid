@@ -1,48 +1,88 @@
-import sys, torch, json
-sys.path.insert(0, r"D:\Хакатон мера\falcon")
-from falcon.model import build_model
-from falcon.losses import ReIDCriterion
+"""Сколько видеопамяти и времени стоит шаг обучения при разных размерах батча.
+
+    python scripts/measure_vram.py
+
+Нужен, чтобы подбирать батч под конкретную карту, а не угадывать: печатает пик
+выделенной памяти, зарезервированный объём и секунды на шаг для батчей 32-80,
+с градиентным чекпоинтингом и без него. На эти числа ссылается комментарий в
+falcon/train.py про выбор батча.
+
+Считается на случайных данных: измеряется стоимость самого шага, а не качество.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+import torch
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from falcon.losses import ReIDCriterion  # noqa: E402
+from falcon.model import build_model  # noqa: E402
+
+CLASSES = 1156          # столько машин в обучающей части локального сплита
+EMBEDDING = 2048
+BATCHES = (32, 48, 64, 80)
 
 
-def measure(bs, ckpt, size=256):
-    torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats()
-    m = build_model(num_classes=1156, embedding_dim=2048, pretrained=False, verbose=False).cuda().train()
-    m.set_gradient_checkpointing(ckpt)
-    crit = ReIDCriterion(1156, 2048, center_weight=0.0005).cuda()
-    opt = torch.optim.Adam(list(m.parameters()) + list(crit.parameters()), lr=3.5e-4)
+def measure(batch: int, checkpointing: bool, size: int = 256) -> tuple[float, float, float]:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    model = build_model(num_classes=CLASSES, embedding_dim=EMBEDDING,
+                        pretrained=False, verbose=False).cuda().train()
+    model.set_gradient_checkpointing(checkpointing)
+    criterion = ReIDCriterion(CLASSES, EMBEDDING, center_weight=0.0005).cuda()
+    optimiser = torch.optim.Adam(list(model.parameters()) + list(criterion.parameters()), lr=3.5e-4)
     scaler = torch.amp.GradScaler("cuda")
-    x = torch.randn(bs, 3, size, size, device="cuda")
-    y = torch.arange(bs, device="cuda") // 4
-    cams = torch.arange(bs, device="cuda") % 4
-    import time
-    for i in range(4):
-        if i == 1: torch.cuda.synchronize(); t0 = time.perf_counter()
-        opt.zero_grad(set_to_none=True)
+
+    images = torch.randn(batch, 3, size, size, device="cuda")
+    labels = torch.arange(batch, device="cuda") // 4
+    cameras = torch.arange(batch, device="cuda") % 4
+
+    started = 0.0
+    for step in range(4):
+        # Первый шаг прогревочный: в него попадает подбор алгоритмов cuDNN.
+        if step == 1:
+            torch.cuda.synchronize()
+            started = time.perf_counter()
+        optimiser.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda"):
-            f, lg = m(x)
-            loss, _ = crit(f.float(), lg.float(), y, cams)
-        scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
+            features, logits = model(images)
+            loss, _ = criterion(features.float(), logits.float(), labels, cameras)
+        scaler.scale(loss).backward()
+        scaler.step(optimiser)
+        scaler.update()
     torch.cuda.synchronize()
-    per_step = (time.perf_counter() - t0) / 3
+
+    per_step = (time.perf_counter() - started) / 3
     peak = torch.cuda.max_memory_allocated() / 1e9
     reserved = torch.cuda.max_memory_reserved() / 1e9
-    del m, crit, opt, x, y, cams
+    del model, criterion, optimiser, images, labels, cameras
     torch.cuda.empty_cache()
     return peak, reserved, per_step
 
 
-if __name__ == "__main__":
+def main() -> None:
     free, total = torch.cuda.mem_get_info()
-    print("свободно %.2f ГБ из %.2f ГБ (занято другим: %.2f ГБ)" % (
-        free/1e9, total/1e9, (total-free)/1e9))
-    print()
-    print("%-6s %-14s %-11s %-11s %-10s" % ("батч", "чекпоинтинг", "пик", "зарезерв.", "с/шаг"))
-    for ckpt in (False, True):
-        for bs in (32, 48, 64, 80):
+    print(f"свободно {free / 1e9:.2f} ГБ из {total / 1e9:.2f} ГБ "
+          f"(занято другим: {(total - free) / 1e9:.2f} ГБ)\n")
+    print(f"{'батч':<6} {'чекпоинтинг':<14} {'пик':<11} {'зарезерв.':<11} {'с/шаг':<10}")
+    for checkpointing in (False, True):
+        for batch in BATCHES:
+            label = "да" if checkpointing else "нет"
             try:
-                peak, res, step = measure(bs, ckpt)
-                print("%-6d %-14s %-11s %-11s %-10.2f" % (
-                    bs, "да" if ckpt else "нет", "%.2f ГБ" % peak, "%.2f ГБ" % res, step), flush=True)
+                peak, reserved, per_step = measure(batch, checkpointing)
             except torch.OutOfMemoryError:
-                print("%-6d %-14s не влезает" % (bs, "да" if ckpt else "нет"), flush=True)
+                print(f"{batch:<6} {label:<14} не влезает", flush=True)
                 torch.cuda.empty_cache()
+                continue
+            print(f"{batch:<6} {label:<14} {peak:.2f} ГБ{'':<5} {reserved:.2f} ГБ{'':<5} "
+                  f"{per_step:<10.2f}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -30,7 +30,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from overnight import MAX_ATTEMPTS, log, watch  # noqa: E402
 
-from falcon.submit import SUBMISSION_CHECKPOINTS  # noqa: E402
 from falcon.train import keep_system_awake  # noqa: E402
 
 CLIP = ["--architecture", "clip-vit-b16", "--lr", "3e-5", "--backbone-lr", "3e-6",

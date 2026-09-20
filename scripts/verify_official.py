@@ -85,14 +85,16 @@ def main() -> None:
     split = build_local_split(rows, seed=42)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
                                                                   flip_tta=SUBMISSION_FLIP_TTA),
-                                projection=None if str(args.projection).lower() == 'none' else args.projection)
+                                projection=None if str(args.projection).lower() == "none"
+                                           else args.projection)
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
 
     qids = [r.image_id for r in split.query]
     gids = [r.image_id for r in split.gallery]
     truth = pd.DataFrame([
-        {"image_id": r.image_id, "vehicle_id": str(r.vehicle_id), "camera_id": str(r.camera_id), "split": part}
+        {"image_id": r.image_id, "vehicle_id": str(r.vehicle_id),
+         "camera_id": str(r.camera_id), "split": part}
         for part, items in (("query", split.query), ("gallery", split.gallery)) for r in items])
     q_df = truth[truth.split == "query"].set_index("image_id")
     g_df = truth[truth.split == "gallery"].set_index("image_id")

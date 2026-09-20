@@ -69,7 +69,8 @@ def main() -> None:
 
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
                                                                   flip_tta=args.flip_tta),
-                                projection=None if str(args.projection).lower() == 'none' else args.projection)
+                                projection=None if str(args.projection).lower() == "none"
+                                           else args.projection)
     original = extractor.transform
     width, height = extractor.config.size[1], extractor.config.size[0]
     def box(x0, y0, x1, y1):

@@ -118,7 +118,7 @@ class SubmissionConfig:
 
 
 def enrich_vectors(query_vectors: np.ndarray, gallery_vectors: np.ndarray,
-                   config: "SubmissionConfig") -> tuple[np.ndarray, np.ndarray]:
+                   config: SubmissionConfig) -> tuple[np.ndarray, np.ndarray]:
     """Обогащение векторов соседями: DBA для галереи, alpha-QE для запросов.
 
     Один снимок машины видит её с одной точки; средний вектор нескольких

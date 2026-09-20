@@ -485,7 +485,7 @@ class Projection:
         return int(self.components.shape[1])
 
     @classmethod
-    def load(cls, path: Path | str) -> "Projection":
+    def load(cls, path: Path | str) -> Projection:
         state = torch.load(path, map_location="cpu", weights_only=True)
         return cls(state["mean"], state["components"], state["scale"], state.get("metadata"))
 
@@ -493,7 +493,7 @@ class Projection:
         torch.save({"mean": self.mean, "components": self.components, "scale": self.scale,
                     "metadata": self.metadata}, path)
 
-    def to(self, device) -> "Projection":
+    def to(self, device) -> Projection:
         self.mean = self.mean.to(device)
         self.components = self.components.to(device)
         return self

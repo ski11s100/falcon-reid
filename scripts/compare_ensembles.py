@@ -129,7 +129,8 @@ def main() -> None:
     q_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.query}
     g_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.gallery}
     truth = pd.DataFrame([
-        {"image_id": r.image_id, "vehicle_id": str(r.vehicle_id), "camera_id": str(r.camera_id), "split": part}
+        {"image_id": r.image_id, "vehicle_id": str(r.vehicle_id),
+         "camera_id": str(r.camera_id), "split": part}
         for part, items in (("query", split.query), ("gallery", split.gallery)) for r in items])
     q_df = truth[truth.split == "query"].set_index("image_id")
     g_df = truth[truth.split == "gallery"].set_index("image_id")
@@ -211,7 +212,8 @@ def main() -> None:
         speed = entry.get("скорость", {})
         print(f"{variant} | {entry['mAP@10']} | {entry['кандидаты']['порог']} | "
               f"{entry['кандидаты']['балл 0.7·F1+0.3·TNR']} | {speed.get('latency_ms_b1', '-')} | "
-              f"{speed.get('throughput_fps', '-')} | {entry['оценка баллов из 75 (точность+кандидаты+скорость)']}")
+              f"{speed.get('throughput_fps', '-')} | "
+              f"{entry['оценка баллов из 75 (точность+кандидаты+скорость)']}")
 
 
 if __name__ == "__main__":

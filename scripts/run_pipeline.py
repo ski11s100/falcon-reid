@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from falcon.calibrate import calibrate  # noqa: E402
 from falcon.data import audit, build_local_split, read_manifest  # noqa: E402
-from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor  # noqa: E402
+from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import (  # noqa: E402
     Identity,
     evaluate_ranking,

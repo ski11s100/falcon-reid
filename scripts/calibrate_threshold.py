@@ -128,13 +128,15 @@ def draw(grid: np.ndarray, curves: dict[str, np.ndarray], mean: np.ndarray,
     for value in (0.6, 0.7, 0.8, 0.9):
         parts.append(f'<line x1="{pad}" y1="{y(value):.1f}" x2="{width - pad}" y2="{y(value):.1f}" '
                      f'stroke="rgba(255,255,255,0.08)"/>')
-        parts.append(f'<text x="{pad - 34}" y="{y(value) + 4:.1f}" fill="#6f7688" font-size="11">{value:.1f}</text>')
+        parts.append(f'<text x="{pad - 34}" y="{y(value) + 4:.1f}" fill="#6f7688" '
+                     f'font-size="11">{value:.1f}</text>')
     for tick in np.arange(grid[0], grid[-1] + 0.001, 0.05):
         parts.append(f'<text x="{x(tick) - 12:.1f}" y="{height - pad + 20}" fill="#6f7688" '
                      f'font-size="11">{tick:.2f}</text>')
-    for colour, (label, values) in zip(COLOURS, curves.items()):
+    for colour, values in zip(COLOURS, curves.values()):
         points = " ".join(f"{x(t):.1f},{y(v):.1f}" for t, v in zip(grid, values))
-        parts.append(f'<polyline points="{points}" fill="none" stroke="{colour}" stroke-width="1.6" opacity="0.75"/>')
+        parts.append(f'<polyline points="{points}" fill="none" stroke="{colour}" '
+                     f'stroke-width="1.6" opacity="0.75"/>')
     points = " ".join(f"{x(t):.1f},{y(v):.1f}" for t, v in zip(grid, mean))
     parts.append(f'<polyline points="{points}" fill="none" stroke="#ffffff" stroke-width="3"/>')
     parts.append(f'<line x1="{x(chosen):.1f}" y1="{pad - 10}" x2="{x(chosen):.1f}" y2="{height - pad}" '
@@ -143,7 +145,8 @@ def draw(grid: np.ndarray, curves: dict[str, np.ndarray], mean: np.ndarray,
                  f'font-weight="700">выбран {chosen:.3f}</text>')
     legend = list(curves) + ["среднее"]
     for i, (label, colour) in enumerate(zip(legend, COLOURS[:len(curves)] + ["#ffffff"])):
-        parts.append(f'<rect x="{width - pad - 150}" y="{pad + i * 20 - 8}" width="12" height="3" fill="{colour}"/>')
+        parts.append(f'<rect x="{width - pad - 150}" y="{pad + i * 20 - 8}" width="12" '
+                     f'height="3" fill="{colour}"/>')
         parts.append(f'<text x="{width - pad - 132}" y="{pad + i * 20 - 2}" fill="#a3aab8" '
                      f'font-size="12">{label}</text>')
     parts.append('</svg>')

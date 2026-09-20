@@ -30,7 +30,12 @@ sys.path.insert(0, str(ROOT))
 from falcon.data import build_local_split, load_crop, read_manifest  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import l2_normalize  # noqa: E402
-from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA, SUBMISSION_PROJECTION  # noqa: E402
+from falcon.submit import (  # noqa: E402
+    CALIBRATED_THRESHOLD,
+    SUBMISSION_CHECKPOINTS,
+    SUBMISSION_FLIP_TTA,
+    SUBMISSION_PROJECTION,
+)
 
 THRESHOLD = CALIBRATED_THRESHOLD
 TILE = (220, 150)
@@ -116,7 +121,8 @@ def main() -> None:
     split = build_local_split(rows, seed=42)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
                                                                   flip_tta=SUBMISSION_FLIP_TTA),
-                                projection=None if str(args.projection).lower() == 'none' else args.projection)
+                                projection=None if str(args.projection).lower() == "none"
+                                           else args.projection)
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
     scores = query @ gallery.T
@@ -153,9 +159,11 @@ def main() -> None:
         "Rank-1": round(float(hits.mean()), 4),
         "по размеру рамки": by_quartile(area, hits, ["самые мелкие", "мелкие", "крупные", "самые крупные"]),
         "по яркости": by_quartile(light[:, 0], hits, ["самые тёмные", "тёмные", "светлые", "самые светлые"]),
-        "по резкости": by_quartile(light[:, 1], hits, ["самые смазанные", "смазанные", "резкие", "самые резкие"]),
+        "по резкости": by_quartile(light[:, 1], hits,
+                                   ["самые смазанные", "смазанные", "резкие", "самые резкие"]),
         "по смене ракурса": by_quartile(view_change, hits,
-                                        ["ракурс тот же", "почти тот же", "заметная смена", "перед/зад против бока"]),
+                                        ["ракурс тот же", "почти тот же", "заметная смена",
+                                         "перед/зад против бока"]),
     }
 
     # Двойники: неверный первый кандидат с высоким сходством.
@@ -216,7 +224,8 @@ def main() -> None:
         t_area = np.array([r.bbox[2] * r.bbox[3] / 1000 for r in t_query])
 
         def medians(values):
-            return [round(float(np.median(values[~answered])), 3), round(float(np.median(values[answered])), 3)]
+            return [round(float(np.median(values[~answered])), 3),
+                    round(float(np.median(values[answered])), 3)]
 
         stats["публичный тест: ложные отказы"] = {
             "запросов": len(t_query),
