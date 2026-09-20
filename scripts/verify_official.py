@@ -8,8 +8,13 @@
      скриптом (organizers/evaluate.py) — числа обязаны совпасть;
   3. считает режим кандидатов эталонным скриптом при выбранном пороге и для
      двух базовых стратегий («всегда отвечать», «всегда отказывать»);
-  4. перебирает порог и находит максимум балла 0.7·F1 + 0.3·TNR после
-     сглаживания окном ±0.01 — так выбран CALIBRATED_THRESHOLD.
+  4. перебирает порог и находит максимум балла 0.7·F1 + 0.3·TNR на ЭТОМ
+     разбиении — справочно, чтобы видеть форму кривой и запас до максимума.
+
+Сам CALIBRATED_THRESHOLD выбирается не здесь: оптимум одного разбиения
+оказывается подогнанным под его жеребьёвку. Порог считает
+scripts/calibrate_threshold.py — по среднему баллу четырёх разбиений
+отложенной выборки (docs/threshold_choice.json, docs/threshold_curves.svg).
 
 Отчёт пишется в docs/official_check.json. Нужен pandas (requirements-dev.txt):
 эталонный скрипт на нём написан.
@@ -124,7 +129,8 @@ def main() -> None:
 
     report = {
         "обогащение векторов": {"DBA k": config.dba_k, "alpha-QE k": config.qe_k,
-                                "минимальное сходство соседа": config.neighbour_min},
+                                "минимальное сходство соседа": config.neighbour_min,
+                                "вес соседа": f"сходство^{config.expansion_power:g}"},
         "ranking": {
             "эталонный скрипт": rounded(official_ranking),
             "наш код": {"mAP@10": round(ours.mAP, 4), "Rank-1": round(ours.rank_1, 4),
@@ -145,14 +151,16 @@ def main() -> None:
                                   "балл": round(score(never), 4)},
         },
         "подбор порога": {
-            "метод": "максимум балла после сглаживания окном ±0.01",
-            "сглаженный максимум": float(grid[best_index]),
+            "метод": "справочно: максимум балла на этом разбиении после сглаживания окном ±0.01; "
+                     "сдаваемый порог выбран по среднему четырёх разбиений "
+                     "(scripts/calibrate_threshold.py, docs/threshold_choice.json)",
+            "оптимум этого разбиения": float(grid[best_index]),
             "кривая": [{"порог": float(t), "балл": round(float(v), 4)} for t, v in zip(grid, curve)],
         },
     }
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     summary = {k: v for k, v in report.items() if k != "подбор порога"}
-    summary["сглаженный максимум порога"] = float(grid[best_index])
+    summary["оптимум этого разбиения"] = float(grid[best_index])
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

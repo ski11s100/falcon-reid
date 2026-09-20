@@ -210,6 +210,7 @@ def build_local_split(
     open_set_fraction: float = 0.20,
     query_share: float = 0.35,
     seed: int = 42,
+    partition_seed: int | None = None,
 ) -> LocalSplit:
     """Режет train.csv на обучение и локальный тест по протоколу организаторов.
 
@@ -223,11 +224,19 @@ def build_local_split(
         КАМЕРЫ — иначе он целиком junk и в mAP не участвует;
       * отдельная доля ID идёт целиком в запросы и никогда в галерею: это и есть
         open-set запросы, на которых считается TNR.
+
+    partition_seed меняет ТОЛЬКО деление отложенных машин на галерею, запросы и
+    open-set, оставляя обучающие машины прежними. Это нужно для проверки
+    устойчивости: прирост метрики не должен зависеть от одной случайной
+    жеребьёвки. По умолчанию (None) поведение в точности прежнее.
     """
     if not 0 < val_identity_fraction < 1 or not 0 <= open_set_fraction < 1:
         raise ValueError("Доли должны лежать в (0, 1)")
 
     rng = random.Random(seed)
+    # Отдельный генератор для деления отложенных машин: при partition_seed=None
+    # это тот же самый генератор, то есть прежнее поведение до вызова.
+    split_rng = random.Random(partition_seed) if partition_seed is not None else rng
     groups = group_by_identity(rows)
     if any(r.camera_id is None for r in rows):
         raise ValueError("Нет camera_id — честный кросс-камерный сплит построить нельзя")
@@ -253,10 +262,13 @@ def build_local_split(
     #     f = O*n / (O*n + C*n*query_share),  C = V - O
     # следует O = k*V/(1+k), где k = f*query_share/(1-f).
     open_ids: set[str] = set()
+    order = list(val_ids)
+    if partition_seed is not None:
+        split_rng.shuffle(order)
     if open_set_fraction > 0:
         k = open_set_fraction * query_share / (1.0 - open_set_fraction)
         open_count = max(1, round(k * len(val_ids) / (1.0 + k)))
-        open_ids = set(val_ids[:min(open_count, len(val_ids) - 2)])
+        open_ids = set(order[:min(open_count, len(order) - 2)])
 
     gallery: list[Observation] = []
     query: list[Observation] = []
@@ -294,9 +306,9 @@ def build_local_split(
         for shot in shots:
             by_camera[str(shot.camera_id)].append(shot)
 
-        picked = rng.choice(sorted(by_camera))
+        picked = split_rng.choice(sorted(by_camera))
         pool = list(by_camera[picked])
-        rng.shuffle(pool)
+        split_rng.shuffle(pool)
         candidate_query = pool[:max(1, min(cut, len(pool) - 0))]
         rest = [r for r in shots if r not in candidate_query]
 

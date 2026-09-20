@@ -63,6 +63,12 @@ SUBMISSION_QE_K = 2
 # ниже 0.4 это заведомо другая машина. Страховка на случай галереи, где у
 # машины мало снимков: тогда вектор просто не меняется.
 SUBMISSION_NEIGHBOUR_MIN = 0.4
+# Вес соседа — сходство в кубе (классический alpha-QE, alpha=3): дальний сосед
+# почти не влияет, а близкий влияет почти как сам снимок. Проверено на
+# галереях разного размера (500/750/1100/1541 снимков, 12 прогонов на размер):
+# линейный вес даёт средний mAP@10 0.8004, куб — 0.8088, и при размере галереи
+# закрытого теста (750) разрыв больше всего: 0.8042 против 0.8163.
+SUBMISSION_EXPANSION_POWER = 3.0
 
 # Порог отказа этого ансамбля.
 #
@@ -72,12 +78,16 @@ SUBMISSION_NEIGHBOUR_MIN = 0.4
 # а максимум после сглаживания окном ±0.01: TNR считается всего по 182 запросам
 # без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
 #
-# Порог калибруется под состав моделей и пространство векторов: у ансамбля
-# двух ResNet он был 0.4925, у ансамбля с CLIP — 0.51, после PCA-проекции —
-# 0.6075, а с обогащением векторов первым кандидатом чаще оказывается верный,
-# и оптимум сместился к 0.595. Уверенность при этом считается по ИСХОДНОМУ
-# косинусу, так что шкала порога не поехала.
-CALIBRATED_THRESHOLD = 0.595
+# Порог выбран не по одному прогону, а по среднему восьми
+# (scripts/calibrate_threshold.py, отчёт docs/threshold_choice.json): четыре
+# жеребьёвки отложенной выборки × две плотности галереи — наша (1541 снимок на
+# 890 запросов) и такая же редкая, как в публичном тесте (750 снимков на 1110
+# запросов). Обе поправки нужны: оптимум одной жеребьёвки подогнан под неё
+# (0.595…0.71), а оптимум плотной галереи завышен относительно редкой (0.65
+# против 0.565) — на редкой сходство с лучшим кандидатом ниже.
+# На закрытом тесте будет ровно одна жеребьёвка и одна плотность, и какие —
+# неизвестно. Шкала порога — ИСХОДНЫЙ косинус (до обогащения векторов).
+CALIBRATED_THRESHOLD = 0.605
 
 
 @dataclass
@@ -98,6 +108,7 @@ class SubmissionConfig:
     dba_k: int = SUBMISSION_DBA_K
     qe_k: int = SUBMISSION_QE_K
     neighbour_min: float = SUBMISSION_NEIGHBOUR_MIN
+    expansion_power: float = SUBMISSION_EXPANSION_POWER
     use_rerank: bool = False
     rerank_pool: int = 100
     k1: int = 12
@@ -116,9 +127,13 @@ def enrich_vectors(query_vectors: np.ndarray, gallery_vectors: np.ndarray,
     ближайшими соседями по галерее, а вектор запроса — со своими ближайшими
     объектами уже обогащённой галереи.
 
+    Вес соседа — его сходство в степени expansion_power (alpha-QE, alpha=3):
+    чем дальше сосед, тем меньше он тянет вектор на себя.
+
     На отложенной выборке это самый дешёвый прирост из найденных: mAP@10
-    0.7564 -> 0.7961 без какого-либо переобучения (бутстреп +0.040,
-    95% интервал [+0.027; +0.053]).
+    0.7564 -> 0.7971 без какого-либо переобучения (бутстреп +0.040,
+    95% интервал [+0.027; +0.053]). На галерее размера закрытого теста
+    (750 снимков) прирост больше: 0.7956 -> 0.8163.
 
     Важно: выдача запроса зависит только от него самого и от галереи. Связей
     между запросами нет, поэтому потоковый протокол (ответ 38) соблюдён.
@@ -135,7 +150,8 @@ def enrich_vectors(query_vectors: np.ndarray, gallery_vectors: np.ndarray,
             np.fill_diagonal(similarity, -1.0)
         neighbours = np.argsort(-similarity, axis=1)[:, :k]
         weights = np.take_along_axis(similarity, neighbours, axis=1)
-        weights = np.where(weights >= config.neighbour_min, weights, 0.0)
+        weights = np.where(weights >= config.neighbour_min,
+                           np.clip(weights, 0.0, None) ** config.expansion_power, 0.0)
         return l2_normalize(base + (pool[neighbours] * weights[:, :, None]).sum(axis=1))
 
     gallery = merge(gallery, gallery, config.dba_k, drop_self=True)
@@ -254,14 +270,24 @@ def write_submission(
         "accepted_queries": accepted,
         "refused_queries": len(queries) - accepted,
         "refusal_rate": round((len(queries) - accepted) / max(1, len(queries)), 4),
+        "vector_expansion": {
+            "method": ("DBA по галерее + alpha-QE запроса по галерее; "
+                       "связей запрос-запрос нет (ответ 38)"),
+            "dba_k": config.dba_k,
+            "qe_k": config.qe_k,
+            "neighbour_min": config.neighbour_min,
+            "weight": f"сходство^{config.expansion_power:g}",
+            "affects": "только порядок кандидатов; confidence считается до обогащения",
+        },
         "reranking": {
             "enabled": config.use_rerank,
             "method": "k-reciprocal, потоково-совместимый (без связей query-query)",
             "k1": config.k1, "k2": config.k2, "lambda": config.lambda_value,
             "pool": config.rerank_pool,
         },
-        "confidence_definition": ("косинусное сходство эмбеддингов, не калиброванная вероятность; "
-                                  "переранжирование, если включено, меняет только порядок"),
+        "confidence_definition": ("косинусное сходство исходных эмбеддингов (до обогащения), "
+                                  "не калиброванная вероятность; обогащение и переранжирование "
+                                  "меняют только порядок"),
         "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
         "checksums": {
             name: hashlib.sha256((output_dir / name).read_bytes()).hexdigest()

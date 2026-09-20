@@ -56,7 +56,7 @@ services:
       # Порог отказа, откалиброванный на локальном сплите под этот ансамбль по
       # баллу 0.7*F1 + 0.3*TNR эталонного скрипта организаторов
       # (CALIBRATED_THRESHOLD в falcon/submit.py, проверка — verify_official.py).
-      FALCON_MATCH_THRESHOLD: "0.595"
+      FALCON_MATCH_THRESHOLD: "0.605"
       FALCON_PROJECTION: /opt/falcon/models/projection.pt
       FALCON_FLIP_TTA: "false"
       # Пусто — доступ без ключа (для проверки одной командой).

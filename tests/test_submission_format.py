@@ -86,6 +86,16 @@ class TestSubmissionFiles(unittest.TestCase):
             np.testing.assert_allclose(saved[: len(self.queries)], self.query_vectors, rtol=1e-6)
             np.testing.assert_allclose(saved[len(self.queries):], self.gallery_vectors, rtol=1e-6)
 
+    def test_manifest_declares_vector_expansion(self):
+        """Манифест обязан описывать обогащение векторов: жюри должно видеть,
+        что порядок кандидатов строится не по голому косинусу."""
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, _ = self._write(0.0, directory)
+            expansion = manifest["vector_expansion"]
+            self.assertEqual(expansion["dba_k"], SubmissionConfig().dba_k)
+            self.assertEqual(expansion["qe_k"], SubmissionConfig().qe_k)
+            self.assertIn("до обогащения", manifest["confidence_definition"])
+
     def test_embedding_count_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             config = SubmissionConfig(use_rerank=False)

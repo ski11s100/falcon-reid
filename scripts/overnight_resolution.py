@@ -99,6 +99,15 @@ def main() -> None:
         subprocess.run([sys.executable, str(ROOT / "scripts" / script), str(args.dataset),
                         "--checkpoints", *checkpoints, "--projection", str(projection),
                         "--output", str(args.output / name)], cwd=ROOT, check=True)
+
+    # Порог зависит от модели: у новых весов шкала сходства своя. Считаем его
+    # здесь же, чтобы утром сравнивать варианты по их собственным порогам.
+    log("порог отказа под новые веса")
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "calibrate_threshold.py"),
+                    str(args.dataset), "--checkpoints", *checkpoints,
+                    "--projection", str(projection),
+                    "--output", str(args.output / "threshold_choice.json")],
+                   cwd=ROOT, check=True)
     log(f"ГОТОВО за {(time.perf_counter() - started) / 3600:.2f} ч")
 
 

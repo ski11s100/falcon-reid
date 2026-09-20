@@ -58,6 +58,23 @@ class TestEnrichment(unittest.TestCase):
         self.assertTrue(np.allclose(query, q, atol=1e-6))
         self.assertTrue(np.allclose(gallery, g, atol=1e-6))
 
+    def test_distant_neighbour_pulls_less_than_a_close_one(self):
+        """Вес соседа — сходство в кубе: дальний сосед почти не влияет.
+
+        Проверяем на двух галерейных снимках: близкий сосед и далёкий. При
+        линейном весе далёкий тянет вектор заметно сильнее, чем при кубе.
+        """
+        base = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+        close = np.array([0.95, 0.312, 0.0], dtype=np.float32)
+        far = np.array([0.55, 0.835, 0.0], dtype=np.float32)
+        gallery = np.vstack([base[0], close, far]).astype(np.float32)
+        shifts = {}
+        for power in (1.0, 3.0):
+            config = SubmissionConfig(dba_k=2, qe_k=0, neighbour_min=0.4, expansion_power=power)
+            _, enriched = enrich_vectors(base, gallery, config)
+            shifts[power] = float(enriched[0] @ far)
+        self.assertLess(shifts[3.0], shifts[1.0])
+
     def test_switched_off_by_zero_neighbours(self):
         q, g = sample()
         query, gallery = enrich_vectors(q, g, SubmissionConfig(dba_k=0, qe_k=0))
