@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 300" width="1180" height="300" font-family="Manrope, Segoe UI, Arial, sans-serif">
+  <!-- Схема пользовательского пути оператора (раздел 11 ТЗ). -->
+  <rect width="1180" height="300" fill="#0b0e14"/>
+  <text x="24" y="40" fill="#eef1f6" font-size="20" font-weight="700">Путь оператора: найти машину на других камерах</text>
+  <text x="24" y="64" fill="#6f7688" font-size="13">Ни на одном шаге не используется номер: он размыт на кадрах и не участвует в признаках</text>
+
+  <g fill="#11161f" stroke="rgba(255,255,255,0.12)">
+    <rect x="24" y="92" width="200" height="128" rx="14"/>
+    <rect x="264" y="92" width="200" height="128" rx="14"/>
+    <rect x="504" y="92" width="200" height="128" rx="14"/>
+    <rect x="744" y="92" width="200" height="128" rx="14"/>
+    <rect x="984" y="92" width="172" height="128" rx="14"/>
+  </g>
+
+  <g font-size="13" fill="#a3aab8">
+    <g font-size="15" font-weight="700" fill="#eef1f6">
+      <text x="48" y="130">1. Кадр с камеры</text>
+      <text x="288" y="130">2. Рамка машины</text>
+      <text x="528" y="130">3. Поиск</text>
+      <text x="768" y="130">4. Решение</text>
+      <text x="1008" y="130">5. Разбор</text>
+    </g>
+    <text x="48" y="156">перетащить, вставить</text>
+    <text x="48" y="176">из буфера или выбрать</text>
+    <text x="48" y="196">файлом</text>
+    <text x="288" y="156">обвести мышью</text>
+    <text x="288" y="176">прямо на кадре или</text>
+    <text x="288" y="196">задать в пикселях</text>
+    <text x="528" y="156">вектор 256 чисел,</text>
+    <text x="528" y="176">поиск по галерее,</text>
+    <text x="528" y="196">30 мс на кадр</text>
+    <text x="768" y="156">совпадение выше</text>
+    <text x="768" y="176">порога 0.595 или</text>
+    <text x="768" y="196">честный отказ</text>
+    <text x="1008" y="156">сравнение пары,</text>
+    <text x="1008" y="176">карта внимания,</text>
+    <text x="1008" y="196">выгрузка CSV и JSON</text>
+  </g>
+
+  <g stroke="#4f8cff" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M232 156 L256 156"/>
+    <path d="M472 156 L496 156"/>
+    <path d="M712 156 L736 156"/>
+    <path d="M952 156 L976 156"/>
+  </g>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4f8cff"/>
+    </marker>
+  </defs>
+
+  <g font-size="12.5">
+    <rect x="24" y="238" width="1132" height="40" rx="12" fill="rgba(124,196,255,0.08)" stroke="rgba(124,196,255,0.35)"/>
+    <text x="44" y="263" fill="#7cc4ff">Схема города сверху повторяет тот же путь: цель появляется при загрузке кадра, при поиске по камерам идёт волна, находки всплывают у камер.</text>
+  </g>
+</svg>
