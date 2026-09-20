@@ -37,9 +37,12 @@ def main() -> None:
     args.target.parent.mkdir(parents=True, exist_ok=True)
     torch.save(state, args.target)
 
-    # Сверка: те же входы через исходный и экспортированный чекпойнт.
+    # Сверка: те же входы через исходный и экспортированный чекпойнт. Размер
+    # входа берётся из самого чекпойнта: у ViT позиционные эмбеддинги привязаны
+    # к числу патчей, и модель, обученная на 288, не примет кадр 256.
+    size = tuple(state.get("preprocessing", {}).get("size") or (256, 256))
     torch.manual_seed(0)
-    images = torch.randn(8, 3, 256, 256)
+    images = torch.randn(8, 3, int(size[1]), int(size[0]))
     vectors = []
     for path in (args.source, args.target):
         model = load_checkpoint(path)[0].eval()
@@ -47,7 +50,7 @@ def main() -> None:
             vectors.append(model(images))  # в режиме eval модель отдаёт нормированный вектор
     cosine = (vectors[0] * vectors[1]).sum(1)
     print(f"{args.target}: {args.target.stat().st_size / 1e6:.1f} МБ "
-          f"(было {args.source.stat().st_size / 1e6:.1f}), "
+          f"(было {args.source.stat().st_size / 1e6:.1f}), вход {size[0]}×{size[1]}, "
           f"косинус с исходным: мин {cosine.min():.6f}")
 
 

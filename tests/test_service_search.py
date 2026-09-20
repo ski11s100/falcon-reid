@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from service.app import app, require_model, require_repository  # noqa: E402
-from service.repository import GalleryItem, SQLiteRepository  # noqa: E402
+from service.app import app, expand_query, require_model, require_repository  # noqa: E402
+from service.repository import GalleryItem, Match, SQLiteRepository  # noqa: E402
 
 
 class FakeExtractor:
@@ -98,6 +98,42 @@ class TestSearchExclude(unittest.TestCase):
         vehicles = self.repository.list_vehicles(10)
         self.assertEqual({v["vehicle_id"] for v in vehicles}, {"ТС-1", "ТС-2"})
         self.assertTrue(all("image_id" in v for v in vehicles))
+
+
+class TestExpandQuery(unittest.TestCase):
+    """Обогащение запроса не должно терять кандидатов и падать на пропусках."""
+
+    def setUp(self):
+        self.vectors = {
+            "a": np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            "b": np.array([0.8, 0.6, 0.0], dtype=np.float32),
+            "c": np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        }
+        self.matches = [Match(image_id=k, vehicle_id="ТС", score=0.5, metadata={})
+                        for k in ("a", "b", "c")]
+
+    def repository(self, known):
+        vectors = self.vectors
+
+        class Fake:
+            def embeddings_of(self, image_ids):
+                return {k: vectors[k] for k in image_ids if k in known}
+
+        return Fake()
+
+    def test_all_candidates_survive_reordering(self):
+        found = expand_query(self.matches, self.vectors["a"], self.repository({"a", "b", "c"}))
+        self.assertEqual({m.image_id for m in found}, {"a", "b", "c"})
+        self.assertEqual(found[0].image_id, "a")
+
+    def test_missing_vectors_do_not_break_search(self):
+        """Снимок могли удалить между поиском и чтением векторов."""
+        found = expand_query(self.matches, self.vectors["a"], self.repository({"a", "b"}))
+        self.assertEqual({m.image_id for m in found}, {"a", "b"})
+
+    def test_single_candidate_is_returned_as_is(self):
+        one = self.matches[:1]
+        self.assertIs(expand_query(one, self.vectors["a"], self.repository({"a"})), one)
 
 
 if __name__ == "__main__":
