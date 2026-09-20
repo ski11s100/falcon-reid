@@ -59,6 +59,7 @@ class VectorRepository(Protocol):
     def upsert(self, items: list[GalleryItem]) -> int: ...
     def search(self, embedding: np.ndarray, top_k: int) -> list[Match]: ...
     def embedding_of(self, image_id: str) -> np.ndarray | None: ...
+    def embeddings_of(self, image_ids: list[str]) -> dict[str, np.ndarray]: ...
     def delete(self, image_id: str) -> bool: ...
     def count(self) -> int: ...
     def list_vehicles(self, limit: int = 100) -> list[dict]: ...
@@ -212,6 +213,20 @@ class PgVectorRepository:
             row = cursor.fetchone()
         return np.asarray(row[0], dtype=np.float32) if row else None
 
+    def embeddings_of(self, image_ids: list[str]) -> dict[str, np.ndarray]:
+        """Векторы сразу нескольких снимков — одним запросом, а не по одному.
+
+        Нужно для обогащения запроса соседями: сервис берёт векторы найденных
+        кандидатов и усредняет с ними вектор запроса (falcon/submit.py).
+        """
+        if not image_ids:
+            return {}
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT image_id, embedding FROM {self.table} WHERE image_id = ANY(%s)",
+                (list(image_ids),))
+            return {row[0]: np.asarray(row[1], dtype=np.float32) for row in cursor.fetchall()}
+
     def delete(self, image_id: str) -> bool:
         with self._lock, self.connection.cursor() as cursor:
             cursor.execute(f"DELETE FROM {self.table} WHERE image_id = %s", (image_id,))
@@ -317,6 +332,16 @@ class SQLiteRepository:
             row = self.connection.execute(
                 "SELECT embedding FROM gallery WHERE image_id = ?", (image_id,)).fetchone()
         return np.frombuffer(row[0], dtype=np.float32).copy() if row else None
+
+    def embeddings_of(self, image_ids: list[str]) -> dict[str, np.ndarray]:
+        if not image_ids:
+            return {}
+        marks = ",".join("?" * len(image_ids))
+        with self._lock:
+            rows = self.connection.execute(
+                f"SELECT image_id, embedding FROM gallery WHERE image_id IN ({marks})",
+                list(image_ids)).fetchall()
+        return {row[0]: np.frombuffer(row[1], dtype=np.float32).copy() for row in rows}
 
     def delete(self, image_id: str) -> bool:
         with self._lock:

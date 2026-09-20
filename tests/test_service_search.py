@@ -70,6 +70,30 @@ class TestSearchExclude(unittest.TestCase):
         self.assertNotIn("red-a", found)
         self.assertEqual(found, ["red-b", "blue"])
 
+    def test_confidence_stays_the_plain_cosine(self):
+        """Обогащение меняет порядок, но не шкалу: порог откалиброван по косинусу.
+
+        Проверяем, что число рядом со снимком — именно косинус исходных
+        векторов, а не пересчитанное сходство обогащённого запроса.
+        """
+        extractor = FakeExtractor()
+        query = extractor.encode_image(Image.new("RGB", (32, 24), (200, 30, 30)))
+        response = self.client.post("/api/search", json={"image_base64": png((200, 30, 30)),
+                                                         "top_k": 3})
+        candidates = response.json()["candidates"]
+        for candidate in candidates:
+            reference = self.repository.embedding_of(candidate["image_id"])
+            expected = float(np.asarray(query, dtype=np.float32) @ reference)
+            self.assertAlmostEqual(candidate["score"], expected, places=5)
+
+    def test_batch_embeddings_match_single_reads(self):
+        ids = ["red-a", "red-b", "blue"]
+        batch = self.repository.embeddings_of(ids)
+        self.assertEqual(set(batch), set(ids))
+        for image_id in ids:
+            np.testing.assert_allclose(batch[image_id], self.repository.embedding_of(image_id))
+        self.assertEqual(self.repository.embeddings_of([]), {})
+
     def test_gallery_summary_names_the_thumbnail_shot(self):
         vehicles = self.repository.list_vehicles(10)
         self.assertEqual({v["vehicle_id"] for v in vehicles}, {"ТС-1", "ТС-2"})

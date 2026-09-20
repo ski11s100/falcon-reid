@@ -30,6 +30,7 @@ from PIL import Image, ImageOps
 from falcon.explain import GradCAM, overlay_heatmap, plate_attention, plate_masking_boxes
 from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
 from falcon.model import VehicleReID, ViTReID
+from falcon.submit import SubmissionConfig, enrich_vectors
 
 from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
@@ -298,6 +299,38 @@ def fingerprint(embedding: np.ndarray | None) -> list[float] | None:
     return [round(float(v), 4) for v in values]
 
 
+# Сколько кандидатов берётся из базы до обогащения запроса. Порядок внутри этой
+# сотни может поменяться, поэтому запрашивается заведомо больше, чем нужно
+# оператору, а лишнее отбрасывается после пересортировки.
+EXPANSION_POOL = 100
+
+
+def expand_query(matches: list, embedding: np.ndarray, repository: VectorRepository) -> list:
+    """Обогащение запроса соседями из галереи — то же, что в пакетной сдаче.
+
+    Вектор запроса усредняется (со взвешиванием по сходству) с ближайшими к нему
+    снимками галереи и кандидаты пересортировываются по обогащённому вектору.
+    Это тот же alpha-QE, что в falcon/submit.enrich_vectors, только без DBA по
+    галерее: в живом сервисе снимки добавляются по одному, и пересчитывать
+    соседей всей галереи на каждую вставку нельзя.
+
+    Уверенность (score) остаётся ИСХОДНЫМ косинусом: порог откалиброван именно в
+    этой шкале, а обогащение меняет только порядок.
+    """
+    if len(matches) < 2:
+        return matches
+    vectors = repository.embeddings_of([m.image_id for m in matches])
+    if len(vectors) < 2:
+        return matches
+    usable = [m for m in matches if m.image_id in vectors]
+    gallery = np.stack([vectors[m.image_id] for m in usable])
+    # dba_k=0: галерею не трогаем, обогащаем только запрос.
+    config = SubmissionConfig(dba_k=0)
+    enriched, _ = enrich_vectors(np.asarray(embedding, dtype=np.float32)[None, :], gallery, config)
+    order = np.argsort(-(enriched[0] @ gallery.T), kind="stable")
+    return [usable[i] for i in order]
+
+
 def to_candidate(match, repository: VectorRepository | None = None) -> Candidate:
     reference = repository.embedding_of(match.image_id) if repository is not None else None
     return Candidate(image_id=match.image_id, vehicle_id=match.vehicle_id,
@@ -362,8 +395,9 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
     embedding = embed(extractor, crop)
 
     excluded = set(request.exclude_image_ids)
-    found = repository.search(embedding, request.top_k + len(excluded))
-    found = [m for m in found if m.image_id not in excluded][:request.top_k]
+    found = repository.search(embedding, EXPANSION_POOL + len(excluded))
+    found = [m for m in found if m.image_id not in excluded]
+    found = expand_query(found, embedding, repository)[:request.top_k]
     candidates = [to_candidate(m, repository) for m in found]
     query_fingerprint = fingerprint(embedding)
 

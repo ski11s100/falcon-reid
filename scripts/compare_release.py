@@ -121,6 +121,27 @@ def bootstrap(before: dict[str, float], after: dict[str, float], draws: int = 50
             "запросов": len(shared)}
 
 
+def verdict(report: dict, with_speed: bool = True) -> tuple[str, list[str]]:
+    """Менять ли сдачу. Возвращает вердикт и список причин отказаться.
+
+    Правила намеренно строгие: замена ансамбля стоит пересчёта порога, сдачи и
+    всех отчётов, поэтому она оправдана только уверенным приростом точности,
+    который ничего не ломает.
+    """
+    reasons = []
+    if report["бутстрэп"]["95% интервал"][0] <= 0:
+        reasons.append("прирост mAP@10 неотличим от нуля")
+    drop = report["сдача"]["балл кандидатов"] - report["кандидат"]["балл кандидатов"]
+    if drop > CANDIDATE_TOLERANCE:
+        reasons.append(f"балл кандидатов падает на {drop:.4f}")
+    if with_speed:
+        if report["кандидат"]["задержка batch=1, мс"] > LATENCY_LIMIT_MS:
+            reasons.append("задержка выше 40 мс")
+        if report["кандидат"]["пропускная способность, кадр/с"] < THROUGHPUT_LIMIT_FPS:
+            reasons.append("пропускная способность ниже 100 кадров/с")
+    return ("менять сдачу" if not reasons else "оставить как есть"), reasons
+
+
 def vectors_for(checkpoints, projection, split, workers):
     extractor = build_extractor(
         [Path(c) for c in checkpoints],
@@ -192,22 +213,7 @@ def main() -> None:
         del extractor, query, gallery
 
     report["бутстрэп"] = bootstrap(per_query["сдача"], per_query["кандидат"])
-
-    accuracy_better = report["бутстрэп"]["95% интервал"][0] > 0
-    candidate_drop = report["сдача"]["балл кандидатов"] - report["кандидат"]["балл кандидатов"]
-    reasons = []
-    if not accuracy_better:
-        reasons.append("прирост mAP@10 неотличим от нуля")
-    if candidate_drop > CANDIDATE_TOLERANCE:
-        reasons.append(f"балл кандидатов падает на {candidate_drop:.4f}")
-    if not args.skip_benchmark:
-        if report["кандидат"]["задержка batch=1, мс"] > LATENCY_LIMIT_MS:
-            reasons.append("задержка выше 40 мс")
-        if report["кандидат"]["пропускная способность, кадр/с"] < THROUGHPUT_LIMIT_FPS:
-            reasons.append("пропускная способность ниже 100 кадров/с")
-
-    report["вердикт"] = "менять сдачу" if not reasons else "оставить как есть"
-    report["причины"] = reasons
+    report["вердикт"], report["причины"] = verdict(report, with_speed=not args.skip_benchmark)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"бутстрэп": report["бутстрэп"], "вердикт": report["вердикт"],

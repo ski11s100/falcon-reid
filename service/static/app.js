@@ -637,8 +637,14 @@ function renderSearch(data) {
       <p class="verdict__title">${view.title}</p>
       <p class="verdict__note">${escapeHtml(data.refusal_reason || "Лучший кандидат выше порога уверенности")}</p>
     </div>`;
+  // Порядок кандидатов строится по обогащённым векторам, а число рядом со
+  // снимком — исходное сходство. Обычно это одно и то же, но если порядок
+  // разошёлся с числами, лучше сказать об этом прямо, чем оставить вопрос.
+  const reordered = data.candidates.some((c, i) => i > 0 && c.score > data.candidates[i - 1].score);
   $("result-meta").textContent = `${Math.round(data.elapsed_ms)} мс · рамка ${data.quality.width}×${data.quality.height}`
-    + (threshold !== null ? ` · порог ${formatThreshold(threshold)}` : "") + " · нажмите на снимок, чтобы сравнить";
+    + (threshold !== null ? ` · порог ${formatThreshold(threshold)}` : "")
+    + (reordered ? " · порядок — по векторам, обогащённым соседями" : "")
+    + " · нажмите на снимок, чтобы сравнить";
   renderConfidence(data);
   renderCandidates();
   $("warnings").innerHTML = data.quality.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
