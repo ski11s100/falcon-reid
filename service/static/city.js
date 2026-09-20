@@ -7,7 +7,7 @@
  * идентификация (ReID): та же машина на другой камере, без номера.
  *
  * Схема отвечает на действия оператора:
- *   setQuery(true)   — кадр загружен: цель подписана, остальное приглушено;
+ *   setQuery(true)   — кадр загружен: цель выделена, остальное приглушено;
  *   setScanning(on)  — идёт поиск: от цели по камерам бежит волна;
  *   showResults(...) — у камер всплывают настоящие снимки найденных кандидатов
  *                      со сходством: зелёные выше порога, серые ниже.
@@ -526,8 +526,7 @@
         this.marks.push({ car, until: this.time + 0.9, target: false });
         return;
       }
-      const score = 0.82 + this.rand() * 0.14;
-      this.marks.push({ car, until: this.time + 2.6, target: true, camera: camera.id, score });
+      this.marks.push({ car, until: this.time + 2.6, target: true });
       const previous = this.route[this.route.length - 1];
       if (previous && previous.id !== camera.id) {
         this.links.push({ from: previous, to: camera, until: this.time + 9 });
@@ -547,8 +546,8 @@
      * ними. Дом, выросший вверх от своего основания, закрывает только то, что
      * на экране выше основания, то есть позади него, поэтому один слой
      * застройки поверх машин даёт верное перекрытие. В каждом кадре рисуются
-     * только машины, конусы камер, сами камеры и подписи: детализация города
-     * не стоит ничего.
+     * только машины, конусы камер, сами камеры и результаты поиска:
+     * детализация города не стоит ничего.
      */
 
     layer(paint) {
@@ -581,13 +580,12 @@
       return 1 - smoothstep((t - 42) / 6);
     }
 
-    clock() {
+    /* Сколько сейчас «часов» в городе — дробное число для стрелок. */
+    hours() {
       const t = (this.time + DAY.start) % DAY.length;
       const k = DAY.keys.findIndex(([at], i) => t < DAY.keys[i + 1]?.[0]);
       const [t0, h0] = DAY.keys[k], [t1, h1] = DAY.keys[k + 1];
-      const hours = (h0 + (h1 - h0) * (t - t0) / (t1 - t0)) % 24;
-      const minutes = Math.floor((hours % 1) * 6) * 10;
-      return `${String(Math.floor(hours)).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+      return (h0 + (h1 - h0) * (t - t0) / (t1 - t0)) % 24;
     }
 
     /* Слой дня под слоем ночи, прозрачность ночного — по времени суток. */
@@ -624,7 +622,7 @@
       this.drawCameras(g);
       this.drawLinks(g);
       this.drawMarks(g);
-      this.drawTargetLabel(g);
+      this.drawTarget(g);
       this.drawResults(g);
     }
 
@@ -895,17 +893,51 @@
 
     /* ---------- Движущееся ---------- */
 
-    /* Часы на схеме: видно, что сутки идут. */
+    /* Часы на схеме — аналоговые: стрелки идут вместе с суточным циклом,
+     * ободок теплеет днём и синеет ночью. Цифр нет: подписи на схеме мешают. */
     drawClock(g, night) {
-      const label = `${night > 0.5 ? "☾" : "☀"}  ${this.clock()}`;
-      g.font = "700 11px Manrope, 'Segoe UI', sans-serif";
-      const w = g.measureText(label).width + 18;
-      g.fillStyle = "rgba(9, 13, 21, 0.72)";
+      const hours = this.hours();
+      const accent = night > 0.5 ? "rgba(185, 215, 255, 0.85)" : "rgba(255, 205, 122, 0.9)";
+      const r = 16;
+      g.save();
+      g.translate(this.width - r - 20, r + 16);
+
+      g.fillStyle = "rgba(9, 13, 21, 0.66)";
       g.beginPath();
-      g.roundRect(this.width - w - 14, 12, w, 22, 11);
+      g.arc(0, 0, r, 0, Math.PI * 2);
       g.fill();
-      g.fillStyle = night > 0.5 ? "#b9d7ff" : "#ffd27a";
-      g.fillText(label, this.width - w - 5, 27);
+      g.strokeStyle = accent;
+      g.lineWidth = 1.3;
+      g.stroke();
+
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const long = i % 3 === 0;
+        g.strokeStyle = long ? "rgba(223, 230, 243, 0.8)" : "rgba(223, 230, 243, 0.3)";
+        g.lineWidth = long ? 1.4 : 1;
+        const inner = r - (long ? 5 : 3);
+        g.beginPath();
+        g.moveTo(Math.sin(a) * inner, -Math.cos(a) * inner);
+        g.lineTo(Math.sin(a) * (r - 1.6), -Math.cos(a) * (r - 1.6));
+        g.stroke();
+      }
+
+      const hand = (angle, length, width, colour) => {
+        g.strokeStyle = colour;
+        g.lineWidth = width;
+        g.lineCap = "round";
+        g.beginPath();
+        g.moveTo(-Math.sin(angle) * 2.5, Math.cos(angle) * 2.5);
+        g.lineTo(Math.sin(angle) * length, -Math.cos(angle) * length);
+        g.stroke();
+      };
+      hand(((hours % 12) / 12) * Math.PI * 2, r * 0.52, 2.6, "#e7ecf5");
+      hand(((hours % 1) * 60 / 60) * Math.PI * 2, r * 0.8, 1.5, "#c3cbdb");
+      g.fillStyle = accent;
+      g.beginPath();
+      g.arc(0, 0, 2, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
     }
 
     drawBeacons(g) {
@@ -1026,10 +1058,10 @@
       g.globalAlpha = 1;
     }
 
-    /* Камера: столб, корпус с объективом по направлению обзора, индикатор и
-     * номер на бейдже. Сработав, камера вспыхивает объективом. */
+    /* Камера: столб, корпус с объективом по направлению обзора и индикатор
+     * записи. Сработав, камера вспыхивает объективом — без подписи: номер
+     * камеры виден в карточке результата, на схеме он только мешает. */
     drawCameras(g) {
-      g.font = "700 9.5px Manrope, 'Segoe UI', sans-serif";
       const pole = 15 * Math.max(0.85, this.zoom);
       for (const camera of this.cameras) {
         const [x, y] = this.project(camera.u, camera.v);
@@ -1074,17 +1106,6 @@
         g.arc(x - 2.6, topY + 3.2, 1.1, 0, Math.PI * 2);
         g.fill();
 
-        const label = `К${camera.id}`;
-        const w = g.measureText(label).width + 9;
-        g.fillStyle = "rgba(9, 13, 21, 0.78)";
-        g.strokeStyle = active ? "rgba(124, 196, 255, 0.9)" : "rgba(245, 181, 61, 0.5)";
-        g.lineWidth = 1;
-        g.beginPath();
-        g.roundRect(x + 5, topY - 14, w, 13, 6.5);
-        g.fill();
-        g.stroke();
-        g.fillStyle = active ? C.target : "#f5c56b";
-        g.fillText(label, x + 9.5, topY - 4.5);
       }
     }
 
@@ -1109,7 +1130,6 @@
     }
 
     drawMarks(g) {
-      g.font = "600 11px Manrope, 'Segoe UI', sans-serif";
       for (const mark of this.marks) {
         const [x, y] = this.project(mark.car.u, mark.car.v);
         const size = mark.target ? 13 : 9;
@@ -1126,20 +1146,10 @@
           g.lineTo(px, py - sy * c);
         }
         g.stroke();
-        if (mark.target) {
-          const label = `К${mark.camera} · ${mark.score.toFixed(2)}`;
-          const width = g.measureText(label).width + 12;
-          g.fillStyle = `rgba(13, 20, 34, ${0.85 * fade})`;
-          g.beginPath();
-          g.roundRect(x + size + 4, y - size - 6, width, 18, 5);
-          g.fill();
-          g.fillStyle = `rgba(124, 196, 255, ${fade})`;
-          g.fillText(label, x + size + 10, y - size + 7);
-        }
       }
     }
 
-    drawTargetLabel(g) {
+    drawTarget(g) {
       if (!this.query && !this.results.length) return;
       const [x, y] = this.project(this.target.u, this.target.v);
       // Во время поиска от цели расходятся волны, как у радара.
@@ -1160,14 +1170,19 @@
       g.beginPath();
       g.ellipse(x, y, pulse, pulse * 0.62, 0, 0, Math.PI * 2);
       g.stroke();
-      g.font = "800 10px Manrope, 'Segoe UI', sans-serif";
-      const w = g.measureText("ЦЕЛЬ").width + 12;
-      g.fillStyle = "rgba(124, 196, 255, 0.95)";
+      // Перекрестие вместо подписи: понятно без слов.
+      g.strokeStyle = "rgba(124, 196, 255, 0.55)";
+      g.lineWidth = 1;
       g.beginPath();
-      g.roundRect(x - w / 2, y - pulse - 22, w, 15, 7.5);
-      g.fill();
-      g.fillStyle = "#0a0f18";
-      g.fillText("ЦЕЛЬ", x - w / 2 + 6, y - pulse - 11);
+      for (const [dx, dy] of [[-1, 0], [1, 0]]) {
+        g.moveTo(x + dx * (pulse + 4), y);
+        g.lineTo(x + dx * (pulse + 11), y);
+      }
+      for (const [dx, dy] of [[0, -1], [0, 1]]) {
+        g.moveTo(x, y + dy * (pulse * 0.62 + 4));
+        g.lineTo(x, y + dy * (pulse * 0.62 + 9));
+      }
+      g.stroke();
     }
 
     /* Карточки найденных снимков у камер и маршрут между совпадениями. */

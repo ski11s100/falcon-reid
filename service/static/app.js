@@ -112,6 +112,7 @@ async function refreshStatus() {
     $("st-model").title = health.model;
     $("st-device").textContent = health.device === "cuda" ? "GPU" : health.device.toUpperCase();
     $("m-gallery").textContent = health.gallery_size.toLocaleString("ru-RU");
+    $("m-gallery-word").textContent = plural(health.gallery_size, "снимок", "снимка", "снимков");
     $("m-threshold").textContent = health.threshold != null ? formatThreshold(health.threshold) : "не задан";
     if (health.embedding_dim) $("m-dim").textContent = health.embedding_dim.toLocaleString("ru-RU");
   } catch {
@@ -925,7 +926,17 @@ $("try-example").addEventListener("click", () => {
 
 /* ---------- Прочее ---------- */
 
-// Порог показываем как есть (0.4925), а не округлённым до 0.492.
+// Порог показываем как есть (0.6075), а не округлённым до 0.607: на разных
+// сборках он разный, а отбрасывать значащую цифру нечестно.
+// Русское число: 1 снимок, 2 снимка, 5 снимков.
+function plural(count, one, few, many) {
+  const n = Math.abs(count) % 100;
+  const last = n % 10;
+  if (n > 10 && n < 20) return many;
+  if (last > 1 && last < 5) return few;
+  return last === 1 ? one : many;
+}
+
 function formatThreshold(value) {
   return String(Number(value.toFixed(4)));
 }
