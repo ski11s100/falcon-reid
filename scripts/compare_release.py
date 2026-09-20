@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import importlib.util
 import io
 import json
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -210,7 +212,12 @@ def main() -> None:
                 speed["latency_ms_b1_median"], speed["best_throughput_fps"])["performance_points_of_20"]
         report[name] = entry
         print(json.dumps({name: entry}, ensure_ascii=False), flush=True)
+        # Второй ансамбль грузится в ту же видеокарту, поэтому первый нужно
+        # отпустить явно: у 6 ГБ запаса на два набора весов нет.
         del extractor, query, gallery
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     report["бутстрэп"] = bootstrap(per_query["сдача"], per_query["кандидат"])
     report["вердикт"], report["причины"] = verdict(report, with_speed=not args.skip_benchmark)
