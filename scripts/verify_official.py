@@ -40,7 +40,14 @@ from falcon.metrics import (  # noqa: E402
     l2_normalize,
     rank_from_embeddings,
 )
-from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA, SUBMISSION_PROJECTION  # noqa: E402
+from falcon.submit import (  # noqa: E402
+    CALIBRATED_THRESHOLD,
+    SUBMISSION_CHECKPOINTS,
+    SUBMISSION_FLIP_TTA,
+    SUBMISSION_PROJECTION,
+    SubmissionConfig,
+    enrich_vectors,
+)
 
 
 def load_official():
@@ -87,14 +94,17 @@ def main() -> None:
     q_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.query}
     g_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.gallery}
 
-    ranking = rank_from_embeddings(query, gallery, qids, gids)
+    # Ровно та же схема, что в сдаче: порядок — по обогащённым векторам,
+    # уверенность — по исходному косинусу (falcon/submit.build_ranking).
+    config = SubmissionConfig()
+    ranked_query, ranked_gallery = enrich_vectors(query, gallery, config)
+    ranking = rank_from_embeddings(ranked_query, ranked_gallery, qids, gids)
     with redirect_stdout(io.StringIO()):
         official_ranking = official.ranking_metrics(q_df, g_df, ranking)
     ours = evaluate_ranking(ranking, q_labels, g_labels)
 
-    scores = query @ gallery.T
-    top = scores.argmax(1)
-    best = scores[np.arange(len(qids)), top]
+    top = (ranked_query @ ranked_gallery.T).argmax(1)
+    best = (query @ gallery.T)[np.arange(len(qids)), top]
 
     def candidates(threshold: float) -> dict:
         return {qids[i]: [(gids[top[i]], float(best[i]))] for i in range(len(qids)) if best[i] >= threshold}
@@ -105,7 +115,7 @@ def main() -> None:
     always = official.candidate_metrics(q_df, g_df, candidates(-1.0))
     never = official.candidate_metrics(q_df, g_df, {})
 
-    grid = np.round(np.arange(0.40, 0.80, 0.0025), 4)
+    grid = np.round(np.arange(0.35, 0.80, 0.0025), 4)
     curve = np.array([score(official.candidate_metrics(q_df, g_df, candidates(t))) for t in grid])
     window = 9
     smooth = np.convolve(curve, np.ones(window) / window, mode="same")
@@ -113,6 +123,8 @@ def main() -> None:
     best_index = int(np.argmax(smooth[inner])) + window // 2
 
     report = {
+        "обогащение векторов": {"DBA k": config.dba_k, "alpha-QE k": config.qe_k,
+                                "минимальное сходство соседа": config.neighbour_min},
         "ranking": {
             "эталонный скрипт": rounded(official_ranking),
             "наш код": {"mAP@10": round(ours.mAP, 4), "Rank-1": round(ours.rank_1, 4),
@@ -120,7 +132,7 @@ def main() -> None:
             "совпадает": abs(official_ranking["mAP@10"] - ours.mAP) < 1e-9,
         },
         "полное ранжирование (справочно)": rounded(
-            official.full_ranking_metrics(query, gallery, qids, gids, q_df, g_df)),
+            official.full_ranking_metrics(ranked_query, ranked_gallery, qids, gids, q_df, g_df)),
         "режим кандидатов": {
             "порог": CALIBRATED_THRESHOLD,
             "эталонный скрипт": rounded(official_chosen),

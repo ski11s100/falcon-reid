@@ -5,10 +5,10 @@
   "gallery": 750,
   "embedding_dim": 256,
   "embeddings_dtype": "float32",
-  "threshold": 0.6075,
-  "accepted_queries": 1048,
-  "refused_queries": 62,
-  "refusal_rate": 0.0559,
+  "threshold": 0.595,
+  "accepted_queries": 1054,
+  "refused_queries": 56,
+  "refusal_rate": 0.0505,
   "reranking": {
     "enabled": false,
     "method": "k-reciprocal, потоково-совместимый (без связей query-query)",
@@ -20,8 +20,8 @@
   "confidence_definition": "косинусное сходство эмбеддингов, не калиброванная вероятность; переранжирование, если включено, меняет только порядок",
   "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
   "checksums": {
-    "submission.csv": "4df81ca6cd40faca497802bd7b62805143c308b30c54d46dbccc807b65d322c4",
-    "candidates.csv": "c74705b20e1e162607fa3eac97a535992c12aeb14785e5927c89bb47c09a1898",
-    "embeddings.npy": "088688488eb37fe00d448c5de97d8b07095f9b6d98f50312504f30bd850835c6"
+    "submission.csv": "e3e28a5bd58b57eddc78ac9e0640a4e1594166395a129312cec2b701805e0dee",
+    "candidates.csv": "5b004a1e543edb2085785e02e77084258b383ea631309c488eb75d10d3e48b8c",
+    "embeddings.npy": "c5784df3f06ee408896cf315fa5cea11da1dbd1b82240cd181ce2bd09c570e9b"
   }
 }

@@ -51,6 +51,19 @@ SUBMISSION_FLIP_TTA = False
 # (scripts/fit_projection.py, falcon/extract.Projection).
 SUBMISSION_PROJECTION = "models/projection.pt"
 
+# Обогащение векторов перед ранжированием (falcon/submit.enrich_vectors).
+# Галерея усредняется со своими ближайшими соседями (DBA), запрос — со своими
+# соседями из галереи (alpha-QE). Связи «запрос — запрос» не используются:
+# ответ 38 запрещает только их, а «запрос → галерея» и «галерея → галерея»
+# разрешены, и выдача каждого запроса по-прежнему не зависит от остальных
+# запросов (закреплено тестом).
+SUBMISSION_DBA_K = 3
+SUBMISSION_QE_K = 2
+# Сосед подмешивается, только если сходство с ним не ниже этого значения:
+# ниже 0.4 это заведомо другая машина. Страховка на случай галереи, где у
+# машины мало снимков: тогда вектор просто не меняется.
+SUBMISSION_NEIGHBOUR_MIN = 0.4
+
 # Порог отказа этого ансамбля.
 #
 # Подобран на локальном сплите (890 запросов, 20% без пары — как в закрытом
@@ -60,9 +73,11 @@ SUBMISSION_PROJECTION = "models/projection.pt"
 # без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
 #
 # Порог калибруется под состав моделей и пространство векторов: у ансамбля
-# двух ResNet он был 0.4925, у ансамбля с CLIP — 0.51, а после PCA-проекции
-# шумовые направления ушли, сходства стали контрастнее, и порог — 0.6075.
-CALIBRATED_THRESHOLD = 0.6075
+# двух ResNet он был 0.4925, у ансамбля с CLIP — 0.51, после PCA-проекции —
+# 0.6075, а с обогащением векторов первым кандидатом чаще оказывается верный,
+# и оптимум сместился к 0.595. Уверенность при этом считается по ИСХОДНОМУ
+# косинусу, так что шкала порога не поехала.
+CALIBRATED_THRESHOLD = 0.595
 
 
 @dataclass
@@ -80,12 +95,52 @@ class SubmissionConfig:
     """
 
     threshold: float | None = None
+    dba_k: int = SUBMISSION_DBA_K
+    qe_k: int = SUBMISSION_QE_K
+    neighbour_min: float = SUBMISSION_NEIGHBOUR_MIN
     use_rerank: bool = False
     rerank_pool: int = 100
     k1: int = 12
     k2: int = 6
     lambda_value: float = 0.7
     candidates_per_query: int = 1
+
+
+def enrich_vectors(query_vectors: np.ndarray, gallery_vectors: np.ndarray,
+                   config: "SubmissionConfig") -> tuple[np.ndarray, np.ndarray]:
+    """Обогащение векторов соседями: DBA для галереи, alpha-QE для запросов.
+
+    Один снимок машины видит её с одной точки; средний вектор нескольких
+    снимков описывает саму машину устойчивее, чем любой из них. Поэтому вектор
+    объекта галереи усредняется (со взвешиванием по сходству) со своими
+    ближайшими соседями по галерее, а вектор запроса — со своими ближайшими
+    объектами уже обогащённой галереи.
+
+    На отложенной выборке это самый дешёвый прирост из найденных: mAP@10
+    0.7564 -> 0.7961 без какого-либо переобучения (бутстреп +0.040,
+    95% интервал [+0.027; +0.053]).
+
+    Важно: выдача запроса зависит только от него самого и от галереи. Связей
+    между запросами нет, поэтому потоковый протокол (ответ 38) соблюдён.
+    """
+    queries = l2_normalize(query_vectors)
+    gallery = l2_normalize(gallery_vectors)
+
+    def merge(base: np.ndarray, pool: np.ndarray, k: int, drop_self: bool) -> np.ndarray:
+        if k <= 0 or len(pool) <= 1:
+            return base
+        k = min(k, len(pool) - 1 if drop_self else len(pool))
+        similarity = base @ pool.T
+        if drop_self:
+            np.fill_diagonal(similarity, -1.0)
+        neighbours = np.argsort(-similarity, axis=1)[:, :k]
+        weights = np.take_along_axis(similarity, neighbours, axis=1)
+        weights = np.where(weights >= config.neighbour_min, weights, 0.0)
+        return l2_normalize(base + (pool[neighbours] * weights[:, :, None]).sum(axis=1))
+
+    gallery = merge(gallery, gallery, config.dba_k, drop_self=True)
+    queries = merge(queries, gallery, config.qe_k, drop_self=False)
+    return queries, gallery
 
 
 def build_ranking(
@@ -99,6 +154,10 @@ def build_ranking(
     gallery = l2_normalize(gallery_vectors)
     if len(gallery) < TOP_K:
         raise ValueError(f"В галерее {len(gallery)} объектов, а сдавать нужно топ-{TOP_K}")
+
+    # Порядок кандидатов определяется по обогащённым векторам, а уверенность —
+    # всегда по исходному косинусу (см. ниже про шкалу порога).
+    ranked_queries, ranked_gallery = enrich_vectors(queries, gallery, config)
 
     top_indices = np.zeros((len(queries), TOP_K), dtype=np.int64)
     top_scores = np.zeros((len(queries), TOP_K), dtype=np.float32)
@@ -125,11 +184,14 @@ def build_ranking(
                 print(json.dumps({"reranked": i + 1, "total": len(queries)}), flush=True)
     else:
         for start in range(0, len(queries), 256):
-            block = queries[start : start + 256] @ gallery.T
+            block = ranked_queries[start : start + 256] @ ranked_gallery.T
+            plain = queries[start : start + 256] @ gallery.T
             for offset, scores in enumerate(block):
                 order = np.argsort(-scores, kind="stable")[:TOP_K]
                 top_indices[start + offset] = order
-                top_scores[start + offset] = scores[order]
+                # Уверенность — исходная косинусная близость: порог откалиброван
+                # именно в этой шкале, а обогащение смещает сходства вверх.
+                top_scores[start + offset] = plain[offset][order]
 
     return top_indices, top_scores
 

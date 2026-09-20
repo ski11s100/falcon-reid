@@ -38,6 +38,7 @@ from falcon.submit import (  # noqa: E402
     SUBMISSION_PROJECTION,
     SubmissionConfig,
     build_ranking,
+    enrich_vectors,
     validate_submission,
     write_submission,
 )
@@ -91,9 +92,12 @@ def main() -> None:
     # дополнительной сортировки ни на одном шаге.
     query_vectors = extractor.extract(queries)
     gallery_vectors = extractor.extract(gallery)
-    embeddings = np.vstack([query_vectors, gallery_vectors]).astype(np.float32)
 
     config = SubmissionConfig(threshold=args.threshold, use_rerank=args.rerank)
+    # В embeddings.npy идут те же векторы, по которым построено ранжирование, —
+    # обогащённые соседями (falcon/submit.enrich_vectors).
+    enriched_queries, enriched_gallery = enrich_vectors(query_vectors, gallery_vectors, config)
+    embeddings = np.vstack([enriched_queries, enriched_gallery]).astype(np.float32)
     top_indices, top_scores = build_ranking(query_vectors, gallery_vectors, config)
 
     manifest = write_submission(args.output, queries, gallery, embeddings,

@@ -96,34 +96,35 @@ def check_weights(report: Report) -> None:
         report.check(False, "чекпоинт читается", str(exc)[:80])
 
 
-def check_metrics(report: Report, run_dir: Path) -> None:
+def check_metrics(report: Report) -> None:
+    """Метрики берутся из отчётов, которые лежат в репозитории и идут в сдачу:
+    docs/official_check.json (эталонный скрипт организаторов),
+    docs/benchmark_container.json (замер в собранном образе),
+    docs/plate_masking_check.json (проверка на опору на номер)."""
     section("3. ИЗМЕРЕННЫЕ МЕТРИКИ")
-    summary = load(run_dir / "summary.json")
-    if not report.check(summary is not None, f"отчёт прогона {run_dir.name}"):
-        return
+    official = load(ROOT / "docs" / "official_check.json")
+    if report.check(official is not None, "отчёт docs/official_check.json"):
+        ranking = official["ranking"]["эталонный скрипт"]
+        accuracy = 45.0 * ranking["mAP@10"]
+        report.points["точность"] = accuracy
+        report.note("mAP@10", f"{ranking['mAP@10']:.4f}  ->  {accuracy:.1f} балла из 45")
+        report.note("Rank-1 / Rank-5", f"{ranking['Rank-1']:.4f} / {ranking['Rank-5']:.4f}")
+        report.check(official["ranking"]["совпадает"], "наш код совпадает с эталонным скриптом")
 
-    validation = summary["validation"]
-    accuracy = 45.0 * validation["mAP@10"]
-    report.points["точность"] = accuracy
-    report.note("mAP@10", f"{validation['mAP@10']:.4f}  ->  {accuracy:.1f} балла из 45")
-    report.note("Rank-1 / Rank-5", f"{validation['Rank-1']:.4f} / {validation['Rank-5']:.4f}")
-    report.note("оценено запросов", f"{validation['scored_queries']}, "
-                                    f"open-set исключено {validation['excluded_queries']}")
-
-    calibration = load(run_dir / "calibration.json")
-    if calibration:
-        selected = calibration["selected"]
-        candidate = 10.0 * selected["combined_score"]
+        mode = official["режим кандидатов"]
+        candidate = 10.0 * mode["балл 0.7·F1+0.3·TNR"]
         report.points["кандидаты"] = candidate
-        report.note("порог отказа", f"{selected['threshold']:.4f}")
-        report.note("F1 / TNR", f"{selected['F1']:.4f} / {selected['TNR']:.4f}"
+        metrics = mode["эталонный скрипт"]
+        report.note("порог отказа", f"{mode['порог']}")
+        report.note("F1 / TNR", f"{metrics['F1']:.4f} / {metrics['TNR']:.4f}"
                                 f"  ->  {candidate:.1f} балла из 10")
-        naive = calibration["baselines"]["always_answer"]["combined_score"]
-        report.check(selected["combined_score"] > naive, "порог выигрывает у наивной стратегии",
-                     f"{selected['combined_score']:.4f} против {naive:.4f}")
+        report.check(mode["наш код совпадает"], "режим кандидатов совпадает с эталонным")
+        naive = mode["всегда отвечать"]["балл"]
+        report.check(mode["балл 0.7·F1+0.3·TNR"] > naive, "порог выигрывает у наивной стратегии",
+                     f"{mode['балл 0.7·F1+0.3·TNR']:.4f} против {naive:.4f}")
 
-    benchmark = load(run_dir / "benchmark.json")
-    if benchmark:
+    benchmark = load(ROOT / "docs" / "benchmark_container.json")
+    if report.check(benchmark is not None, "замер в образе docs/benchmark_container.json"):
         scoring = benchmark["scoring"]
         report.points["скорость"] = scoring["performance_points_of_20"]
         latency = benchmark["latency_ms_b1_median"]
@@ -134,25 +135,26 @@ def check_metrics(report: Report, run_dir: Path) -> None:
             report.warnings.append(f"запас по задержке мал: {40 - latency:.1f} мс")
             print(f"{WARN} запас по задержке всего {40 - latency:.1f} мс")
 
-    plate = load(run_dir / "plate_check.json")
+    plate = load(ROOT / "docs" / "plate_masking_check.json")
     if plate:
-        values = plate["similarity_after_masking"]
-        zone = next((v for k, v in values.items() if "номер" in k), None)
-        controls = [v for k, v in values.items() if "контроль" in k]
-        if zone is not None and controls:
-            # Признак не должен разрушаться от закрашивания зоны номера сильнее,
-            # чем от закрашивания произвольного участка той же площади.
-            report.check(zone >= min(controls) - 0.03, "модель не опирается на зону номера",
-                         f"{zone:.4f} против контрольных {', '.join(f'{c:.4f}' for c in controls)}")
+        drops = plate["падение mAP@10"]
+        narrow = plate["узкая рамка номера против худшей узкой контрольной зоны"]
+        # Закраска зоны номера не должна ронять метрику сильнее, чем закраска
+        # соседнего участка кузова той же площади (ответ 48).
+        report.check(narrow["номер"] <= narrow["худшая контрольная"] + 0.002,
+                     "модель не опирается на зону номера",
+                     f"номер {narrow['номер']:.4f} против контрольной {narrow['худшая контрольная']:.4f}")
+        report.note("падение при закраске", ", ".join(f"{k} {v:.3f}" for k, v in drops.items()))
 
 
-def check_submission(report: Report, run_dir: Path) -> None:
+def check_submission(report: Report) -> None:
+    """Файлы сдачи в репозитории: формат, размерность, доля отказов, порог."""
     section("4. ФАЙЛЫ СДАЧИ")
-    folder = run_dir / "submission"
+    folder = ROOT / "submission"
     if not report.check(folder.is_dir(), "каталог submission/"):
         return
 
-    from falcon.submit import validate_submission
+    from falcon.submit import CALIBRATED_THRESHOLD, validate_submission
 
     manifest = load(folder / "manifest.json")
     if not report.check(manifest is not None, "manifest.json"):
@@ -167,6 +169,9 @@ def check_submission(report: Report, run_dir: Path) -> None:
                            f"({manifest['refusal_rate'] * 100:.1f}%)")
     report.check(manifest["threshold"] is not None, "порог задан",
                  f"{manifest['threshold']}" if manifest["threshold"] else "НЕТ: откажет во всём")
+    report.check(manifest["threshold"] == CALIBRATED_THRESHOLD,
+                 "порог в файлах сдачи совпадает с откалиброванным",
+                 f"{manifest['threshold']} против {CALIBRATED_THRESHOLD}")
 
 
 def check_docker(report: Report) -> None:
@@ -242,8 +247,6 @@ def check_documentation(report: Report) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Проверка готовности решения к сдаче")
-    parser.add_argument("--run", type=Path, default=ROOT / "runs" / "v5-final",
-                        help="Каталог прогона с отчётами")
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--skip-tests", action="store_true")
     args = parser.parse_args()
@@ -255,8 +258,8 @@ def main() -> None:
     report = Report()
     check_code(report, not args.skip_tests)
     check_weights(report)
-    check_metrics(report, args.run)
-    check_submission(report, args.run)
+    check_metrics(report)
+    check_submission(report)
     check_docker(report)
     check_service(report, args.url)
     check_documentation(report)
