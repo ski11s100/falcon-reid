@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # даёт +0.003 mAP@10 ценой двойных вычислений (falcon/submit.py).
     flip_tta: bool = False
     half: bool = True
+    # PCA-проекция склеенного вектора ансамбля (falcon/extract.Projection).
+    # Порог калибруется в пространстве проекции, поэтому она задаётся вместе
+    # с составом моделей и порогом — в .env, Dockerfile и docker-compose.
+    projection: Path | None = None
 
     # Хранилище. Пустой DSN означает локальный SQLite — удобно для разработки,
     # в docker-compose всегда задан Postgres.

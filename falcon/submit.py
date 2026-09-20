@@ -47,6 +47,9 @@ from .rerank import build_gallery_index, rerank_query
 SUBMISSION_CHECKPOINTS = ("models/clip-ours.pt", "models/clip-veri-ours.pt",
                           "models/resnet-v2-veri.pt")
 SUBMISSION_FLIP_TTA = False
+# PCA-проекция склеенного вектора 3584 -> 256, подогнанная на обучающей части
+# (scripts/fit_projection.py, falcon/extract.Projection).
+SUBMISSION_PROJECTION = "models/projection.pt"
 
 # Порог отказа этого ансамбля.
 #
@@ -56,9 +59,10 @@ SUBMISSION_FLIP_TTA = False
 # а максимум после сглаживания окном ±0.01: TNR считается всего по 182 запросам
 # без пары, и точечный максимум шумит. Проверка: scripts/verify_official.py.
 #
-# Порог калибруется под состав моделей: у ансамбля двух ResNet он был 0.4925,
-# у ансамбля с CLIP сходства в целом выше, и порог сдвинулся к 0.51.
-CALIBRATED_THRESHOLD = 0.51
+# Порог калибруется под состав моделей и пространство векторов: у ансамбля
+# двух ResNet он был 0.4925, у ансамбля с CLIP — 0.51, а после PCA-проекции
+# шумовые направления ушли, сходства стали контрастнее, и порог — 0.6075.
+CALIBRATED_THRESHOLD = 0.6075
 
 
 @dataclass

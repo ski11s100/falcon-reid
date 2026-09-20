@@ -35,6 +35,7 @@ from falcon.submit import (  # noqa: E402
     CALIBRATED_THRESHOLD,
     SUBMISSION_CHECKPOINTS,
     SUBMISSION_FLIP_TTA,
+    SUBMISSION_PROJECTION,
     SubmissionConfig,
     build_ranking,
     validate_submission,
@@ -58,6 +59,8 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--projection", type=Path, default=Path(SUBMISSION_PROJECTION),
+                        help="PCA-проекция вектора ансамбля; --projection none — без неё")
     parser.add_argument("--flip-tta", action="store_true", default=SUBMISSION_FLIP_TTA,
                         help="Усреднять вектор с отражённым кадром (в сдаче выключено)")
     parser.add_argument("--rerank", action="store_true",
@@ -80,6 +83,7 @@ def main() -> None:
         ExtractorConfig(batch_size=args.batch_size, num_workers=args.workers,
                         device=args.device, half=True,
                         flip_tta=args.flip_tta),
+        projection=None if str(args.projection).lower() == 'none' else args.projection,
     )
 
     # Порядок строго фиксирован: сначала все query в порядке test_query.csv,

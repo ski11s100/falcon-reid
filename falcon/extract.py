@@ -183,6 +183,13 @@ class ExtractorConfig:
     channels_last: bool = True
     # Загрузка кадров потоками, без порождения процессов (см. build_loader).
     threads: bool = False
+    # CUDA Graphs для batch=1 и 16 (см. FeatureExtractor._replay).
+    cuda_graphs: bool = True
+
+
+# Формы батча, для которых записывается CUDA Graph: 1 — замер latency и
+# поиск в сервисе, 16 — пакетная регистрация (сервис дополняет пачку до 16).
+GRAPH_BATCHES = (1, 16)
 
 
 class FeatureExtractor:
@@ -246,6 +253,9 @@ class FeatureExtractor:
 
         self.transform = build_eval_transform(self.config.size)
         self.feature_dim = self.model.feature_dim
+        self._graphs: dict = {}
+        self._use_graphs = (self.config.cuda_graphs and self.device.type == "cuda"
+                            and self._owns_model)
 
     def _forward(self, batch: torch.Tensor) -> torch.Tensor:
         batch = batch.to(self.device, non_blocking=True)
@@ -255,6 +265,41 @@ class FeatureExtractor:
         if self._pre_cast:
             batch = batch.half()
 
+        if self._use_graphs and batch.shape[0] in GRAPH_BATCHES:
+            return self._replay(batch)
+        return self._compute(batch)
+
+    def _replay(self, batch: torch.Tensor) -> torch.Tensor:
+        """Прямой проход через CUDA Graph: вся цепочка ядер запускается одной командой.
+
+        При batch=1 модель упирается не в видеокарту, а в процессор: сотни
+        мелких ядер, и на запуск каждого уходят микросекунды. ResNet50-IBN при
+        batch=1 шла 10 мс, из них большая часть — запуск ядер. Граф записывается
+        один раз на каждую форму входа и дальше воспроизводится целиком. Это
+        особенно важно на стенде жюри: у Xeon Gold 6338 на 2.0 ГГц запуск ядер
+        медленнее, чем у ноутбучного процессора, на котором мы меряем.
+        """
+        key = (tuple(batch.shape), batch.dtype)
+        entry = self._graphs.get(key)
+        if entry is None:
+            static_input = batch.clone()
+            # Прогрев на отдельном потоке: cuDNN выбирает алгоритмы до записи.
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                for _ in range(3):
+                    self._compute(static_input)
+            torch.cuda.current_stream().wait_stream(side)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                static_output = self._compute(static_input)
+            entry = self._graphs[key] = (graph, static_input, static_output)
+        graph, static_input, static_output = entry
+        static_input.copy_(batch)
+        graph.replay()
+        return static_output.clone()
+
+    def _compute(self, batch: torch.Tensor) -> torch.Tensor:
         with torch.inference_mode(), torch.autocast("cuda", torch.float16, enabled=self._autocast):
             if self.config.flip_tta:
                 # Отражение по горизонтали — единственная TTA, разрешённая ответом 38
@@ -404,6 +449,59 @@ class FeatureExtractor:
 
 
 
+class Projection:
+    """PCA-проекция склеенного вектора ансамбля в пространство меньшей размерности.
+
+    Главные компоненты считаются по векторам ОБУЧАЮЩЕЙ части данных
+    (scripts/fit_projection.py): ни запросы, ни галерея проверки в подгонке не
+    участвуют. Проекция делает две вещи сразу:
+      * отбрасывает шумовые направления склейки трёх моделей — mAP@10 на
+        отложенной выборке растёт на 0.011 (интервал [+0.005; +0.017]);
+      * сжимает вектор 3584 -> 256: миллион объектов занимает 1 ГБ вместо
+        13.4 ГБ, и pgvector может строить индекс HNSW (он работает до 2000
+        измерений).
+    back() восстанавливает приближение полного вектора: оно нужно Grad-CAM,
+    чтобы разделить эталон на части моделей ансамбля.
+    """
+
+    def __init__(self, mean: torch.Tensor, components: torch.Tensor, scale: float,
+                 metadata: dict | None = None):
+        self.mean = mean.float()
+        self.components = components.float()
+        self.scale = float(scale)
+        self.metadata = metadata or {}
+
+    @property
+    def input_dim(self) -> int:
+        return int(self.components.shape[0])
+
+    @property
+    def output_dim(self) -> int:
+        return int(self.components.shape[1])
+
+    @classmethod
+    def load(cls, path: Path | str) -> "Projection":
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        return cls(state["mean"], state["components"], state["scale"], state.get("metadata"))
+
+    def save(self, path: Path | str) -> None:
+        torch.save({"mean": self.mean, "components": self.components, "scale": self.scale,
+                    "metadata": self.metadata}, path)
+
+    def to(self, device) -> "Projection":
+        self.mean = self.mean.to(device)
+        self.components = self.components.to(device)
+        return self
+
+    def apply(self, vectors: torch.Tensor) -> torch.Tensor:
+        projected = (vectors.float() - self.mean) @ self.components
+        return torch.nn.functional.normalize(projected, dim=1)
+
+    def back(self, projected: np.ndarray) -> np.ndarray:
+        components = self.components.cpu().numpy()
+        return self.mean.cpu().numpy() + self.scale * (components @ np.asarray(projected, dtype=np.float32))
+
+
 class EnsembleExtractor:
     """Несколько моделей как один экстрактор.
 
@@ -422,7 +520,7 @@ class EnsembleExtractor:
     """
 
     def __init__(self, checkpoints: list[Path | str], weights: list[float] | None = None,
-                 config: ExtractorConfig | None = None):
+                 config: ExtractorConfig | None = None, projection: Path | str | None = None):
         if not checkpoints:
             raise ValueError("Нужен хотя бы один чекпоинт")
         self.members = [FeatureExtractor(checkpoint=c, config=config) for c in checkpoints]
@@ -440,6 +538,16 @@ class EnsembleExtractor:
             "ensemble": [str(c) for c in checkpoints],
             "weights": self.weights,
         }
+        self.projection = None
+        if projection is not None:
+            self.projection = Projection.load(projection)
+            if self.projection.input_dim != self.feature_dim:
+                raise ValueError(
+                    f"Проекция {projection} рассчитана на вектор {self.projection.input_dim}, "
+                    f"а ансамбль выдаёт {self.feature_dim}: её подгоняли под другой состав моделей")
+            self.projection.to(self.device)
+            self.metadata["projection"] = {"path": str(projection), "dim": self.projection.output_dim}
+            self.feature_dim = self.projection.output_dim
 
     @property
     def model(self):
@@ -459,7 +567,8 @@ class EnsembleExtractor:
         последнем шаге конвейера.
         """
         parts = [m._forward(batch) * w for m, w in zip(self.members, self.weights)]
-        return torch.nn.functional.normalize(torch.cat(parts, dim=1), dim=1)
+        joined = torch.nn.functional.normalize(torch.cat(parts, dim=1), dim=1)
+        return self.projection.apply(joined) if self.projection is not None else joined
 
     def encode_image(self, crop) -> np.ndarray:
         tensor = self.transform(crop).unsqueeze(0)
@@ -498,11 +607,15 @@ class EnsembleExtractor:
 
 
 def build_extractor(checkpoints: list[Path | str], config: ExtractorConfig | None = None,
-                    weights: list[float] | None = None):
-    """Один чекпоинт — обычный экстрактор, несколько — ансамбль."""
-    if len(checkpoints) == 1:
+                    weights: list[float] | None = None, projection: Path | str | None = None):
+    """Один чекпоинт — обычный экстрактор, несколько — ансамбль.
+
+    projection — файл PCA-проекции склеенного вектора (Projection); с ней
+    экстрактор всегда собирается как ансамбль, даже из одной модели.
+    """
+    if len(checkpoints) == 1 and projection is None:
         return FeatureExtractor(checkpoint=checkpoints[0], config=config)
-    return EnsembleExtractor(checkpoints, weights=weights, config=config)
+    return EnsembleExtractor(checkpoints, weights=weights, config=config, projection=projection)
 
 def save_checkpoint(model: VehicleReID, path: Path | str, metadata: dict | None = None) -> Path:
     """Сохраняет веса вместе с описанием препроцессинга.

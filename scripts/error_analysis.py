@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from falcon.data import build_local_split, load_crop, read_manifest  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import l2_normalize  # noqa: E402
-from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA  # noqa: E402
+from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA, SUBMISSION_PROJECTION  # noqa: E402
 
 THRESHOLD = CALIBRATED_THRESHOLD
 TILE = (220, 150)
@@ -108,12 +108,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "error_analysis")
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
+    parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
+                        help="PCA-проекция вектора ансамбля; --projection none — без неё")
     args = parser.parse_args()
 
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=42)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
-                                                                  flip_tta=SUBMISSION_FLIP_TTA))
+                                                                  flip_tta=SUBMISSION_FLIP_TTA),
+                                projection=None if str(args.projection).lower() == 'none' else args.projection)
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
     scores = query @ gallery.T
@@ -197,6 +200,42 @@ def main() -> None:
         "ложных совпадений выше порога": len([r for r in open_set if r["top_score"] >= THRESHOLD]),
     }
     stats["двойники: сходство неверного первого"] = [round(r["top_score"], 3) for r in twins]
+
+    # Публичный тест: разметки нет, но у каждого его запроса есть пара в
+    # галерее (ответ 17 организаторов). Значит, каждый отказ там — наша ошибка,
+    # ложный отказ, и её можно показать на настоящих тестовых кадрах.
+    if (args.dataset / "test_query.csv").is_file():
+        t_query = read_manifest(args.dataset / "test_query.csv", args.dataset / "images")
+        t_gallery = read_manifest(args.dataset / "test_gallery.csv", args.dataset / "images")
+        t_scores = (l2_normalize(extractor.extract(t_query, progress=False))
+                    @ l2_normalize(extractor.extract(t_gallery, progress=False)).T)
+        t_top = t_scores.argmax(1)
+        t_best = t_scores[np.arange(len(t_query)), t_top]
+        answered = t_best >= THRESHOLD
+        t_light = np.array([brightness_and_sharpness(r) for r in t_query])
+        t_area = np.array([r.bbox[2] * r.bbox[3] / 1000 for r in t_query])
+
+        def medians(values):
+            return [round(float(np.median(values[~answered])), 3), round(float(np.median(values[answered])), 3)]
+
+        stats["публичный тест: ложные отказы"] = {
+            "запросов": len(t_query),
+            "отказов (все — ошибки: пара есть у каждого)": int((~answered).sum()),
+            "доля": round(float((~answered).mean()), 4),
+            "медиана яркости: отказ / ответ": medians(t_light[:, 0]),
+            "медиана резкости: отказ / ответ": medians(t_light[:, 1]),
+            "медиана площади рамки, тыс. пикс.: отказ / ответ": medians(t_area),
+        }
+        refused = np.where(~answered)[0]
+        worst = refused[np.argsort(t_best[refused])][:6]
+        rows_refused = [[
+            tile(t_query[i], "запрос: пара есть", "#7cc4ff"),
+            tile(t_gallery[t_top[i]], f"1-й: {t_best[i]:.2f} < {THRESHOLD:g}", "#f5b53d"),
+        ] for i in worst]
+        if rows_refused:
+            sheet(rows_refused, "Публичный тест: отказ там, где пара есть (ложный отказ)",
+                  args.output / "public_refusals.jpg")
+
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2),
                                             encoding="utf-8")

@@ -9,8 +9,9 @@ Dockerfile копирует этот каталог в образ: во врем
 | `clip-ours.pt` | CLIP ViT-B/16 + BNNeck | `runs/plate/clip-ours/best.pt`, экспорт в fp16 | 174 МБ |
 | `clip-veri-ours.pt` | CLIP ViT-B/16 + BNNeck | `runs/plate/clip-veri-ours/best.pt`, экспорт в fp16 | 174 МБ |
 | `resnet-v2-veri.pt` | ResNet50-IBN-a + GeM + BNNeck | `runs/plate/resnet-v2-veri/best.pt`, экспорт в fp16 | 52 МБ |
+| `projection.pt` | PCA-проекция 3584 → 256 | `scripts/fit_projection.py` по обучающей части | 3.7 МБ |
 
-Итого 399 МБ при ограничении раздела 7 ТЗ в 2 ГБ на все веса инференса.
+Итого 403 МБ при ограничении раздела 7 ТЗ в 2 ГБ на все веса инференса.
 Все три модели — основное обучение и затем 15 эпох дообучения с закраской
 зоны номера (`scripts/finetune_plate_erase.py`).
 
@@ -22,6 +23,7 @@ Dockerfile копирует этот каталог в образ: во врем
 .\.venv\Scripts\python.exe scripts/export_weights.py runs/plate/clip-ours/best.pt models/clip-ours.pt
 .\.venv\Scripts\python.exe scripts/export_weights.py runs/plate/clip-veri-ours/best.pt models/clip-veri-ours.pt
 .\.venv\Scripts\python.exe scripts/export_weights.py runs/plate/resnet-v2-veri/best.pt models/resnet-v2-veri.pt
+.\.venv\Scripts\python.exe scripts/fit_projection.py <каталог данных> --dim 256
 ```
 
 Экспорт в fp16 вдвое уменьшает файл и не меняет векторы: вывод и так идёт в

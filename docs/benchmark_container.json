@@ -1,16 +1,16 @@
 {
   "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
-  "latency_ms_b1_median": 36.785,
-  "latency_ms_b1_p95": 43.371,
-  "latency_ms_b1_mean": 36.871,
+  "latency_ms_b1_median": 29.507,
+  "latency_ms_b1_p95": 33.93,
+  "latency_ms_b1_mean": 29.383,
   "throughput_fps": {
-    "1": 47.1,
-    "8": 96.8,
-    "16": 120.3,
-    "32": 125.9
+    "1": 83.4,
+    "8": 101.6,
+    "16": 129.8,
+    "32": 131.5
   },
-  "best_throughput_fps": 125.9,
-  "peak_vram_mb": 1624.3,
+  "best_throughput_fps": 131.5,
+  "peak_vram_mb": 1628.5,
   "precision": "fp16",
   "flip_tta": false,
   "input_size": [
@@ -18,8 +18,8 @@
     256
   ],
   "scoring": {
-    "latency_ms_b1": 36.785,
-    "throughput_fps": 125.9,
+    "latency_ms_b1": 29.507,
+    "throughput_fps": 131.5,
     "latency_points_of_10": 10.0,
     "throughput_points_of_10": 10.0,
     "performance_points_of_20": 20.0

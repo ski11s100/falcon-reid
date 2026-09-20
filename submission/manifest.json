@@ -3,12 +3,12 @@
   "model": "clip-vit-b16-bnneck-v1 + clip-vit-b16-bnneck-v1 + resnet50-ibn-a-bnneck-gem-v1",
   "queries": 1110,
   "gallery": 750,
-  "embedding_dim": 3584,
+  "embedding_dim": 256,
   "embeddings_dtype": "float32",
-  "threshold": 0.51,
-  "accepted_queries": 1045,
-  "refused_queries": 65,
-  "refusal_rate": 0.0586,
+  "threshold": 0.6075,
+  "accepted_queries": 1048,
+  "refused_queries": 62,
+  "refusal_rate": 0.0559,
   "reranking": {
     "enabled": false,
     "method": "k-reciprocal, потоково-совместимый (без связей query-query)",
@@ -20,8 +20,8 @@
   "confidence_definition": "косинусное сходство эмбеддингов, не калиброванная вероятность; переранжирование, если включено, меняет только порядок",
   "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
   "checksums": {
-    "submission.csv": "ea408670f6961e08ab5f00d1a419889a017f3fd6788c4872abbc6a52e4c4a6ca",
-    "candidates.csv": "ea013961cb8a2476d363d62d0a0da038d0926ec902280984af8b6b72894c0887",
-    "embeddings.npy": "06d894cda05ef87bec222e36a38df3f9f0f1aee3109f37f1390f627e9e6401c1"
+    "submission.csv": "4df81ca6cd40faca497802bd7b62805143c308b30c54d46dbccc807b65d322c4",
+    "candidates.csv": "c74705b20e1e162607fa3eac97a535992c12aeb14785e5927c89bb47c09a1898",
+    "embeddings.npy": "088688488eb37fe00d448c5de97d8b07095f9b6d98f50312504f30bd850835c6"
   }
 }

@@ -40,7 +40,7 @@ from falcon.metrics import (  # noqa: E402
     l2_normalize,
     rank_from_embeddings,
 )
-from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA  # noqa: E402
+from falcon.submit import CALIBRATED_THRESHOLD, SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA, SUBMISSION_PROJECTION  # noqa: E402
 
 
 def load_official():
@@ -63,6 +63,8 @@ def main() -> None:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
+    parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
+                        help="PCA-проекция вектора ансамбля; --projection none — без неё")
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "official_check.json")
     args = parser.parse_args()
 
@@ -70,7 +72,8 @@ def main() -> None:
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
     split = build_local_split(rows, seed=42)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
-                                                                  flip_tta=SUBMISSION_FLIP_TTA))
+                                                                  flip_tta=SUBMISSION_FLIP_TTA),
+                                projection=None if str(args.projection).lower() == 'none' else args.projection)
     query = l2_normalize(extractor.extract(split.query, progress=False))
     gallery = l2_normalize(extractor.extract(split.gallery, progress=False))
 

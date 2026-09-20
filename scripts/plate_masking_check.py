@@ -36,7 +36,7 @@ from falcon.data import build_local_split, read_manifest  # noqa: E402
 from falcon.explain import plate_masking_boxes  # noqa: E402
 from falcon.extract import ExtractorConfig, build_extractor  # noqa: E402
 from falcon.metrics import Identity, evaluate_ranking, l2_normalize, rank_from_embeddings  # noqa: E402
-from falcon.submit import SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA  # noqa: E402
+from falcon.submit import SUBMISSION_CHECKPOINTS, SUBMISSION_FLIP_TTA, SUBMISSION_PROJECTION  # noqa: E402
 
 
 def masked(transform, box):
@@ -54,6 +54,8 @@ def main() -> None:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
+    parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
+                        help="PCA-проекция вектора ансамбля; --projection none — без неё")
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "plate_masking_check.json")
     parser.add_argument("--flip-tta", action="store_true", default=SUBMISSION_FLIP_TTA)
     args = parser.parse_args()
@@ -66,7 +68,8 @@ def main() -> None:
     g_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.gallery}
 
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
-                                                                  flip_tta=args.flip_tta))
+                                                                  flip_tta=args.flip_tta),
+                                projection=None if str(args.projection).lower() == 'none' else args.projection)
     original = extractor.transform
     width, height = extractor.config.size[1], extractor.config.size[0]
     def box(x0, y0, x1, y1):
