@@ -50,7 +50,7 @@ def main() -> None:
             vectors.append(model(images))  # в режиме eval модель отдаёт нормированный вектор
     cosine = (vectors[0] * vectors[1]).sum(1)
     print(f"{args.target}: {args.target.stat().st_size / 1e6:.1f} МБ "
-          f"(было {args.source.stat().st_size / 1e6:.1f}), вход {size[0]}×{size[1]}, "
+          f"(было {args.source.stat().st_size / 1e6:.1f}), вход {size[0]}x{size[1]}, "
           f"косинус с исходным: мин {cosine.min():.6f}")
 
 
