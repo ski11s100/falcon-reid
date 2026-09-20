@@ -8,6 +8,18 @@
 его остаточные признаки под угрозой дисквалификации. Решение работает с
 формой кузова, цветом, геометрией, дисками, наклейками и повреждениями.
 
+### Коротко
+
+| Что | Значение | Где проверить |
+|---|---|---|
+| mAP@10 на отложенной выборке | **0.7956** | [docs/official_check.json](docs/official_check.json), счёт эталонным скриптом организаторов |
+| Режим кандидатов 0.7·F1 + 0.3·TNR | **0.868** (F1 0.886, TNR 0.824) | там же, порог 0.605 из [docs/threshold_choice.json](docs/threshold_choice.json) |
+| Задержка batch=1 / пропускная способность | **29.5 мс** / **131 кадр/с** | [docs/benchmark_container.json](docs/benchmark_container.json), замер внутри образа |
+| Размер весов | 403 МБ при лимите 2 ГБ | три модели в fp16, [models/README.md](models/README.md) |
+| Опора на номер | нет: закраска номера стоит столько же, сколько контрольная зона | [scripts/plate_masking_check.py](scripts/plate_masking_check.py) |
+| Запуск | `docker compose up --build` → http://localhost:8000 | раздел 3 |
+| Файлы сдачи | [submission/](submission) — одна команда `run_submission.py` | раздел 4 |
+
 ---
 
 ## 1. Архитектура решения
