@@ -681,7 +681,8 @@ def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
         if handle.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX:
             raise RuntimeError(
                 f"{path} — указатель Git LFS, а не веса модели. "
-                f"Установите Git LFS и выполните: git lfs install && git lfs pull"
+                f"Установите Git LFS и выполните: git lfs install && git lfs pull. "
+                f"Если квота Git LFS исчерпана: python scripts/fetch_weights.py"
             )
     # weights_only=True: распаковываются только тензоры и простые типы. Полный
     # pickle (weights_only=False) выполнил бы код из подложенного файла весов,
