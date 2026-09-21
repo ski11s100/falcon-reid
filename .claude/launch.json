@@ -7,6 +7,12 @@
       "port": 8000
     },
     {
+      "name": "falcon-static",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8010", "--bind", "127.0.0.1", "--directory", "service"],
+      "port": 8010
+    },
+    {
       "name": "falcon-api",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [
