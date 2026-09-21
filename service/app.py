@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import io
@@ -25,6 +26,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
 
 from falcon.explain import GradCAM, overlay_heatmap, plate_attention, plate_masking_boxes
@@ -32,6 +34,7 @@ from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
 from falcon.model import VehicleReID, ViTReID
 from falcon.submit import SubmissionConfig, enrich_vectors
 
+from .audit import AuditLog
 from .config import Settings, get_settings
 from .repository import GalleryItem, VectorRepository, build_repository
 from .security import (
@@ -84,9 +87,13 @@ class ServiceState:
     model_name: str = "не загружена"
     model_summary: str = ""
     storage_name: str = "не подключено"
+    audit: AuditLog | None = None
 
 
 state = ServiceState()
+# Пока сервис не стартовал (например, в тестах без lifespan), записи идут только
+# в журнал процесса.
+_FALLBACK_AUDIT = AuditLog(None)
 
 
 # Вся работа с видеокартой идёт в ОДНОМ выделенном потоке.
@@ -137,10 +144,41 @@ async def lifespan(app: FastAPI):
     if state.extractor is not None:
         state.repository.initialise(state.extractor.feature_dim)
 
+    state.audit = AuditLog(settings.audit_log)
+    state.audit.record("start", model=state.model_name, storage=state.storage_name,
+                       retention_days=settings.retention_days)
+    retention = None
+    if settings.retention_days and state.extractor is not None:
+        purge_expired(state.repository, settings.retention_days, state.audit)
+        retention = asyncio.create_task(retention_loop(settings.retention_days))
+
     yield
 
+    if retention is not None:
+        retention.cancel()
     if state.repository is not None:
         state.repository.close()
+
+
+RETENTION_PERIOD_S = 3600
+
+
+def purge_expired(repository: VectorRepository, days: float, audit: AuditLog) -> int:
+    """Удаляет снимки старше срока хранения и пишет об этом в журнал."""
+    removed = repository.delete_older_than(time.time() - days * 86400)
+    if removed:
+        audit.record("retention", removed=removed, retention_days=days)
+    return removed
+
+
+async def retention_loop(days: float) -> None:
+    """Раз в час — чистка по сроку хранения. Галерея живая, срок истекает всегда."""
+    while True:
+        await asyncio.sleep(RETENTION_PERIOD_S)
+        try:
+            await run_in_threadpool(purge_expired, state.repository, days, state.audit)
+        except Exception:
+            log.exception("чистка по сроку хранения не удалась")
 
 
 app = FastAPI(
@@ -182,6 +220,10 @@ def require_model() -> FeatureExtractor:
             detail="Модель не загружена. Укажите путь к весам в FALCON_CHECKPOINT.",
         )
     return state.extractor
+
+
+def require_audit() -> AuditLog:
+    return state.audit or _FALLBACK_AUDIT
 
 
 def require_repository() -> VectorRepository:
@@ -354,13 +396,17 @@ def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
         model_summary=state.model_summary,
         storage=state.storage_name,
         search=getattr(repository, "ann_index", "exact") if repository else "нет",
+        audit_log=settings.audit_log is not None,
+        audit_log_ok=(state.audit or _FALLBACK_AUDIT).healthy,
+        retention_days=settings.retention_days,
     )
 
 
 @app.post("/api/gallery/register", response_model=RegisterResponse, status_code=201,
           tags=["Галерея"], summary="Добавить наблюдение в галерею",
           dependencies=protected)
-def register(request: RegisterRequest, settings: Settings = Depends(get_settings),
+def register(request: RegisterRequest, raw: Request, settings: Settings = Depends(get_settings),
+             audit: AuditLog = Depends(require_audit),
              extractor: FeatureExtractor = Depends(require_model),
              repository: VectorRepository = Depends(require_repository)) -> RegisterResponse:
     started = time.perf_counter()
@@ -375,6 +421,7 @@ def register(request: RegisterRequest, settings: Settings = Depends(get_settings
         metadata={**request.metadata, "crop": [crop.width, crop.height]},
         thumbnail=make_thumbnail(crop),
     )])
+    audit.record("register", raw, image_id=request.image_id, vehicle_id=request.vehicle_id)
     return RegisterResponse(
         image_id=request.image_id, vehicle_id=request.vehicle_id,
         embedding_dim=int(embedding.size), gallery_size=repository.count(),
@@ -385,7 +432,8 @@ def register(request: RegisterRequest, settings: Settings = Depends(get_settings
 @app.post("/api/search", response_model=SearchResponse, tags=["Поиск"],
           summary="Найти похожие ТС или обоснованно отказаться",
           dependencies=protected)
-def search(request: SearchRequest, settings: Settings = Depends(get_settings),
+def search(request: SearchRequest, raw: Request, settings: Settings = Depends(get_settings),
+           audit: AuditLog = Depends(require_audit),
            extractor: FeatureExtractor = Depends(require_model),
            repository: VectorRepository = Depends(require_repository)) -> SearchResponse:
     started = time.perf_counter()
@@ -404,6 +452,15 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
 
     threshold = request.threshold if request.threshold is not None else settings.match_threshold
     elapsed = round((time.perf_counter() - started) * 1000, 2)
+    # Кто и что искал: без кадра и без вектора, только итог поиска.
+    top = candidates[0] if candidates else None
+    audit.record("search", raw,
+                 verdict=("совпадение" if top is not None and threshold is not None
+                          and top.score >= threshold else "нет совпадения"),
+                 top_image_id=top.image_id if top else None,
+                 top_vehicle_id=top.vehicle_id if top else None,
+                 top_score=round(top.score, 4) if top else None,
+                 threshold=threshold, excluded=len(excluded) or None, elapsed_ms=elapsed)
 
     if threshold is None:
         # Порог не откалиброван — подтверждать совпадение нельзя. Показываем
@@ -437,8 +494,9 @@ def search(request: SearchRequest, settings: Settings = Depends(get_settings),
           status_code=201, tags=["Галерея"],
           summary="Добавить сразу несколько наблюдений",
           dependencies=protected)
-def register_batch(request: BatchRegisterRequest,
+def register_batch(request: BatchRegisterRequest, raw: Request,
                    settings: Settings = Depends(get_settings),
+                   audit: AuditLog = Depends(require_audit),
                    extractor: FeatureExtractor = Depends(require_model),
                    repository: VectorRepository = Depends(require_repository)) -> BatchRegisterResponse:
     """Регистрация пачкой: наполнение галереи для демонстрации за один вызов.
@@ -473,6 +531,7 @@ def register_batch(request: BatchRegisterRequest,
     ) for (entry, crop), embedding in zip(accepted, embeddings)]
 
     registered = repository.upsert(batch) if batch else 0
+    audit.record("register-batch", raw, registered=registered, failed=len(failed) or None)
     return BatchRegisterResponse(
         registered=registered, failed=failed, gallery_size=repository.count(),
         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
@@ -541,7 +600,8 @@ def explain_parts(extractor, reference: np.ndarray) -> list[tuple]:
 @app.post("/api/explain", response_model=ExplainResponse, tags=["Поиск"],
           summary="Показать, какие области повлияли на сопоставление",
           dependencies=protected)
-def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
+def explain(request: ExplainRequest, raw: Request, settings: Settings = Depends(get_settings),
+            audit: AuditLog = Depends(require_audit),
             extractor: FeatureExtractor = Depends(require_model),
             repository: VectorRepository = Depends(require_repository)) -> ExplainResponse:
     """Grad-CAM по близости запроса к конкретному кандидату из галереи.
@@ -582,6 +642,7 @@ def explain(request: ExplainRequest, settings: Settings = Depends(get_settings),
     check = plate_check(extractor, crop, unit) if request.show_plate_region else None
     similarity = check.similarity if check else float(np.dot(embed(extractor, crop), unit))
 
+    audit.record("explain", raw, gallery_id=request.gallery_id)
     return ExplainResponse(
         gallery_id=request.gallery_id,
         similarity=round(similarity, 6),
@@ -607,9 +668,11 @@ def list_gallery(limit: int = 100,
 
 @app.delete("/api/gallery/{image_id}", tags=["Галерея"], summary="Удалить наблюдение",
           dependencies=protected)
-def delete(image_id: str, repository: VectorRepository = Depends(require_repository)) -> dict:
+def delete(image_id: str, raw: Request, audit: AuditLog = Depends(require_audit),
+           repository: VectorRepository = Depends(require_repository)) -> dict:
     if not repository.delete(image_id):
         raise HTTPException(status_code=404, detail="Наблюдение не найдено")
+    audit.record("delete", raw, image_id=image_id)
     return {"deleted": image_id, "gallery_size": repository.count()}
 
 

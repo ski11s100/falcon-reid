@@ -61,6 +61,7 @@ class VectorRepository(Protocol):
     def embedding_of(self, image_id: str) -> np.ndarray | None: ...
     def embeddings_of(self, image_ids: list[str]) -> dict[str, np.ndarray]: ...
     def delete(self, image_id: str) -> bool: ...
+    def delete_older_than(self, cutoff: float) -> int: ...
     def count(self) -> int: ...
     def list_vehicles(self, limit: int = 100) -> list[dict]: ...
     def close(self) -> None: ...
@@ -232,6 +233,12 @@ class PgVectorRepository:
             cursor.execute(f"DELETE FROM {self.table} WHERE image_id = %s", (image_id,))
             return cursor.rowcount > 0
 
+    def delete_older_than(self, cutoff: float) -> int:
+        """Удаляет снимки, добавленные раньше cutoff (секунды Unix). Срок хранения."""
+        with self._lock, self.connection.cursor() as cursor:
+            cursor.execute(f"DELETE FROM {self.table} WHERE created_at < to_timestamp(%s)", (cutoff,))
+            return int(cursor.rowcount)
+
     def count(self) -> int:
         with self.connection.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {self.table}")
@@ -348,6 +355,12 @@ class SQLiteRepository:
             cursor = self.connection.execute("DELETE FROM gallery WHERE image_id = ?", (image_id,))
             self.connection.commit()
             return cursor.rowcount > 0
+
+    def delete_older_than(self, cutoff: float) -> int:
+        with self._lock:
+            cursor = self.connection.execute("DELETE FROM gallery WHERE created_at < ?", (cutoff,))
+            self.connection.commit()
+            return int(cursor.rowcount)
 
     def count(self) -> int:
         with self._lock:

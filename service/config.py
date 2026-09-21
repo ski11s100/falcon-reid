@@ -9,7 +9,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="FALCON_", env_file=".env", extra="ignore")
+    # env_ignore_empty: docker-compose передаёт незаданные переменные пустой
+    # строкой (FALCON_RETENTION_DAYS: ${FALCON_RETENTION_DAYS:-}), и без этого
+    # флага пустое значение не разобралось бы как число и сервис не стартовал.
+    model_config = SettingsConfigDict(env_prefix="FALCON_", env_file=".env", extra="ignore",
+                                      env_ignore_empty=True)
 
     # Модель. Список путей через запятую — тогда поднимается ансамбль, тот же,
     # что идёт в сдачу. Это важно для порога: он калибруется под конкретный
@@ -54,6 +58,15 @@ class Settings(BaseSettings):
     # В эксплуатации задаётся FALCON_API_KEY, и все методы, кроме /api/health,
     # требуют заголовок X-API-Key.
     api_key: str | None = None
+
+    # Журнал обращений (service/audit.py): кто, когда и что искал. Пусто —
+    # записи идут только в журнал контейнера; путь — ещё и в файл на томе.
+    audit_log: Path | None = None
+    # Срок хранения галереи в днях. Пусто — снимки не удаляются сами (так
+    # нужно для показа с заранее наполненной галереей). В эксплуатации срок
+    # задаёт регламент заказчика: 152-ФЗ требует хранить персональные данные
+    # не дольше, чем этого требует цель обработки.
+    retention_days: float | None = None
 
     @property
     def size(self) -> tuple[int, int]:

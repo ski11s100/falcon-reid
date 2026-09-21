@@ -206,3 +206,7 @@ class HealthResponse(BaseModel):
     model_summary: str = Field(default="", description="Состав моделей для человека")
     storage: str
     search: str = Field(description="Режим поиска: hnsw или exact")
+    audit_log: bool = Field(default=False, description="Журнал обращений пишется в файл")
+    audit_log_ok: bool = Field(default=True, description="Последняя запись в журнал удалась")
+    retention_days: float | None = Field(default=None,
+                                         description="Срок хранения галереи, дней; пусто — без срока")

@@ -65,6 +65,7 @@ ENV FALCON_CHECKPOINTS=/opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-v
     FALCON_HOST=0.0.0.0 \
     FALCON_PORT=8000 \
     FALCON_SQLITE_PATH=/opt/falcon/data/falcon.sqlite3 \
+    FALCON_AUDIT_LOG=/opt/falcon/data/audit.jsonl \
     HF_HUB_OFFLINE=1 \
     HF_HUB_DISABLE_TELEMETRY=1
 
