@@ -75,6 +75,21 @@ class TestEnrichment(unittest.TestCase):
             shifts[power] = float(enriched[0] @ far)
         self.assertLess(shifts[3.0], shifts[1.0])
 
+    def test_blocks_give_the_same_result_as_one_matrix(self):
+        """Счёт блоками — только про память: результат обязан совпасть до бита."""
+        import falcon.submit as submit
+        q, g = sample()
+        saved = submit.MERGE_BLOCK
+        try:
+            submit.MERGE_BLOCK = 10 ** 6
+            whole = enrich_vectors(q, g, SubmissionConfig())
+            submit.MERGE_BLOCK = 7            # меньше галереи и не делит её нацело
+            blocks = enrich_vectors(q, g, SubmissionConfig())
+        finally:
+            submit.MERGE_BLOCK = saved
+        for a, b in zip(whole, blocks):
+            np.testing.assert_allclose(a, b, rtol=0, atol=1e-6)
+
     def test_switched_off_by_zero_neighbours(self):
         q, g = sample()
         query, gallery = enrich_vectors(q, g, SubmissionConfig(dba_k=0, qe_k=0))

@@ -69,6 +69,9 @@ SUBMISSION_NEIGHBOUR_MIN = 0.4
 # линейный вес даёт средний mAP@10 0.8004, куб — 0.8088, и при размере галереи
 # закрытого теста (750) разрыв больше всего: 0.8042 против 0.8163.
 SUBMISSION_EXPANSION_POWER = 3.0
+# Сколько строк матрицы сходства обогащение считает за раз: память ограничена
+# блоком, а не квадратом размера галереи.
+MERGE_BLOCK = 2048
 
 # Порог отказа этого ансамбля.
 #
@@ -145,14 +148,22 @@ def enrich_vectors(query_vectors: np.ndarray, gallery_vectors: np.ndarray,
         if k <= 0 or len(pool) <= 1:
             return base
         k = min(k, len(pool) - 1 if drop_self else len(pool))
-        similarity = base @ pool.T
-        if drop_self:
-            np.fill_diagonal(similarity, -1.0)
-        neighbours = np.argsort(-similarity, axis=1)[:, :k]
-        weights = np.take_along_axis(similarity, neighbours, axis=1)
-        weights = np.where(weights >= config.neighbour_min,
-                           np.clip(weights, 0.0, None) ** config.expansion_power, 0.0)
-        return l2_normalize(base + (pool[neighbours] * weights[:, :, None]).sum(axis=1))
+        # Сходства считаются блоками по MERGE_BLOCK строк: полная матрица
+        # «галерея × галерея» на 50 000 снимков заняла бы 10 ГБ, а блок —
+        # десятки мегабайт при любом размере галереи. Результат тот же.
+        merged = np.empty_like(base)
+        for start in range(0, len(base), MERGE_BLOCK):
+            rows = slice(start, start + MERGE_BLOCK)
+            similarity = base[rows] @ pool.T
+            if drop_self:
+                block = np.arange(similarity.shape[0])
+                similarity[block, block + start] = -1.0
+            neighbours = np.argsort(-similarity, axis=1)[:, :k]
+            weights = np.take_along_axis(similarity, neighbours, axis=1)
+            weights = np.where(weights >= config.neighbour_min,
+                               np.clip(weights, 0.0, None) ** config.expansion_power, 0.0)
+            merged[rows] = base[rows] + (pool[neighbours] * weights[:, :, None]).sum(axis=1)
+        return l2_normalize(merged)
 
     gallery = merge(gallery, gallery, config.dba_k, drop_self=True)
     queries = merge(queries, gallery, config.qe_k, drop_self=False)
