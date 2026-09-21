@@ -109,6 +109,93 @@ def python_cpu_busy() -> bool:
         return True
 
 
+NIGHT_MODELS = ("clip-ours", "clip-veri-ours", "resnet-v2-veri")
+# Этапы после обучения и признак готовности каждого: файл, который он пишет.
+NIGHT_STEPS = (("экспорт весов в fp16", "models/resnet-v2-veri.pt"),
+               ("PCA-проекция", "projection.pt"),
+               ("сверка эталонным скриптом", "official_check.json"),
+               ("проверка закраской номера", "plate_masking_check.json"),
+               ("порог отказа", "threshold_choice.json"),
+               ("сравнение со сдачей", "release_choice.json"))
+STEPS_SECONDS = 25 * 60        # проверки после обучения, по прошлым ночам
+
+
+def night_root(run: Path) -> Path | None:
+    """Каталог ночного прогона, если run — одна из его моделей."""
+    if run.name in NIGHT_MODELS and sum((run.parent / m).is_dir() for m in NIGHT_MODELS) >= 1:
+        return run.parent
+    return None
+
+
+def model_state(folder: Path) -> dict:
+    history = read_json(folder / "history.json") or []
+    heartbeat = read_json(folder / "heartbeat.json") or {}
+    config = read_json(folder / "config.json") or {}
+    total = config.get("epochs") or heartbeat.get("epochs_total") or 0
+    scored = [r["validation"]["mAP@10"] for r in history if r.get("validation")]
+    seconds = sorted(r["seconds"] for r in history)
+    return {"done": (folder / "last.pt").is_file(), "epochs": len(history), "total": total,
+            "best": max(scored) if scored else None, "last": scored[-1] if scored else None,
+            "epoch_seconds": seconds[len(seconds) // 2] if seconds else None,
+            "started": folder.is_dir() and bool(history or heartbeat),
+            "architecture": config.get("architecture", "")}
+
+
+def render_night(night: Path, width: int) -> str:
+    """Сводка всей ночи: три модели, проверки, время до конца и вердикт."""
+    states = {name: model_state(night / name) for name in NIGHT_MODELS}
+    lines = [f"{BOLD}ФАЛЬКОН — ночное обучение{RESET}   {GREY}{time.strftime('%H:%M:%S')}{RESET}",
+             f"{GREY}{night}{RESET}", ""]
+
+    clip_epoch = next((s["epoch_seconds"] for s in states.values()
+                       if s["epoch_seconds"] and "clip" in s["architecture"]), 95.0)
+    remaining = 0.0
+    units_done, units_total = 0.0, 0.0
+    for name, state in states.items():
+        total = state["total"] or 30
+        per_epoch = state["epoch_seconds"] or (clip_epoch * (0.6 if "resnet" in name else 1.0))
+        done_epochs = total if state["done"] else state["epochs"]
+        units_done += done_epochs * per_epoch
+        units_total += total * per_epoch
+        remaining += (total - done_epochs) * per_epoch
+    steps_done = sum((night / marker).is_file() for _, marker in NIGHT_STEPS)
+    units_total += STEPS_SECONDS
+    units_done += STEPS_SECONDS * steps_done / len(NIGHT_STEPS)
+    remaining += STEPS_SECONDS * (1 - steps_done / len(NIGHT_STEPS))
+    overall = units_done / units_total if units_total else 0.0
+    finish = time.strftime("%H:%M", time.localtime(time.time() + remaining))
+    lines.append(f"{BOLD}Вся ночь{RESET}   {bar(overall, width - 28, GREEN)} {overall * 100:5.1f}%")
+    lines.append(f"{GREY}осталось примерно {human_time(remaining)}, закончится около {finish}{RESET}")
+    lines.append("")
+
+    for name, state in states.items():
+        if state["done"]:
+            mark, colour, text = "✓", GREEN, "готова"
+        elif state["started"]:
+            mark, colour, text = "▶", YELLOW, f"эпоха {state['epochs'] + 1}/{state['total'] or '?'}"
+        else:
+            mark, colour, text = "·", GREY, "ждёт очереди"
+        quality = f"   mAP@10 лучшее {state['best']:.4f}" if state["best"] is not None else ""
+        lines.append(f"  {colour}{mark} {name:<16}{RESET} {text}{GREEN}{quality}{RESET}")
+    lines.append("")
+    for title, marker in NIGHT_STEPS:
+        ready = (night / marker).is_file()
+        lines.append(f"  {GREEN + '✓' if ready else GREY + '·'} {title}{RESET}")
+
+    verdict = read_json(night / "release_choice.json")
+    if verdict:
+        colour = GREEN if verdict.get("вердикт") == "менять сдачу" else YELLOW
+        candidate = verdict.get("кандидат", {})
+        current = verdict.get("сдача", {})
+        lines += ["", f"{BOLD}Вердикт:{RESET} {colour}{BOLD}{verdict.get('вердикт')}{RESET}",
+                  f"  mAP@10 {candidate.get('mAP@10')} против {current.get('mAP@10')} у сдачи, "
+                  f"балл кандидатов {candidate.get('балл кандидатов')} "
+                  f"против {current.get('балл кандидатов')}"]
+        for reason in verdict.get("причины", []):
+            lines.append(f"  {GREY}— {reason}{RESET}")
+    return "\n".join(lines)
+
+
 def render(run: Path, width: int) -> str:
     history = read_json(run / "history.json") or []
     heartbeat = read_json(run / "heartbeat.json")
@@ -225,7 +312,13 @@ def main() -> None:
                 print(CLEAR + f"{YELLOW}Активных прогонов не найдено.{RESET}\n"
                       f"{GREY}Жду появления runs/…/history.json{RESET}", flush=True)
             else:
-                print(CLEAR + render(run, width), flush=True)
+                night = night_root(run)
+                screen = render(run, width)
+                if night is not None:
+                    # Сверху — вся ночь, ниже — подробности текущей модели.
+                    divider = "─" * min(width, 60)
+                    screen = f"{render_night(night, width)}\n\n{divider}\n{screen}"
+                print(CLEAR + screen, flush=True)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\nвыход")
