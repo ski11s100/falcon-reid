@@ -129,10 +129,11 @@ def load_crop(observation: Observation, target: tuple[int, int] | None = None) -
         if target is not None and image.format == "JPEG":
             # Максимальное уменьшение, при котором кроп ещё не мельче цели.
             scale = 1
+            # target — (высота, ширина), как в transforms.Resize и во всём коде.
             while (
                 scale < 8
-                and width / (scale * 2) >= target[0]
-                and height / (scale * 2) >= target[1]
+                and height / (scale * 2) >= target[0]
+                and width / (scale * 2) >= target[1]
             ):
                 scale *= 2
             if scale > 1:

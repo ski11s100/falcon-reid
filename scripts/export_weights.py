@@ -42,7 +42,7 @@ def main() -> None:
     # к числу патчей, и модель, обученная на 288, не примет кадр 256.
     size = tuple(state.get("preprocessing", {}).get("size") or (256, 256))
     torch.manual_seed(0)
-    images = torch.randn(8, 3, int(size[1]), int(size[0]))
+    images = torch.randn(8, 3, int(size[0]), int(size[1]))   # (высота, ширина)
     vectors = []
     for path in (args.source, args.target):
         model = load_checkpoint(path)[0].eval()

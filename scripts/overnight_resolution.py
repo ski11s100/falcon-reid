@@ -1,19 +1,21 @@
-"""Ночной прогон: дообучение ансамбля на разрешении 288 вместо 256.
+"""Ночной прогон: дообучение ансамбля на другом размере входа и вердикт.
 
-    python scripts/overnight_resolution.py D:/falcon-data
+    python scripts/overnight_resolution.py D:/falcon-data --size 224x320 \
+        --epochs 30 --output runs/aspect-224x320
 
 Зачем. Задача просит различать мелкие детали — диски, наклейки, повреждения,
-рейлинги. При 256 пикселях на кроп они занимают единицы пикселей. Разбор ошибок
-показывает, что модель путает машины одной модели и окраски, а различают их как
-раз мелочи. Больший вход стоит около 27% вычислений: запас по скорости есть
-(29.5 мс при лимите 40).
+рейлинги. Первая попытка — квадрат 288 вместо 256 — не помогла
+(docs/release_choice.json): кузов по-прежнему сжимался в квадрат, а
+вычислений стало на 27% больше. Вторая — вход 224x320 (высота x ширина):
+машина вдвое шире, чем выше, и так она не сплющивается, а вычислений почти
+столько же (14x20 = 280 патчей против 16x16 = 256).
 
-Что делает: каждую модель сдачи дообучает 15 эпох на 288 от её нынешнего
-чекпойнта (позиционные эмбеддинги ViT растягиваются на новое число патчей),
-экспортирует в fp16, заново подгоняет PCA-проекцию и прогоняет две проверки —
-эталонным скриптом организаторов и закраской зоны номера. Ничего в сдаче не
-меняется: все результаты ложатся в runs/res288, решение принимается утром по
-отчётам.
+Что делает: каждую модель сдачи дообучает от её нынешнего чекпойнта
+(позиционные эмбеддинги ViT переносятся на новую сетку патчей), экспортирует
+в fp16, заново подгоняет PCA-проекцию, прогоняет проверки эталонным скриптом
+организаторов и закраской номера, калибрует свой порог и в конце сравнивает
+результат с нынешней сдачей (scripts/compare_release.py). Сдача не меняется:
+всё ложится в --output, утром остаётся прочитать вердикт.
 """
 
 from __future__ import annotations
@@ -32,14 +34,14 @@ from overnight import MAX_ATTEMPTS, log, watch  # noqa: E402
 
 from falcon.train import keep_system_awake  # noqa: E402
 
-CLIP = ["--architecture", "clip-vit-b16", "--lr", "3e-5", "--backbone-lr", "3e-6",
-        "--weight-decay", "1e-4"]
-RESNET = ["--architecture", "resnet50-ibn", "--lr", "3.5e-5"]
-STAGES = {
-    "clip-ours": CLIP,
-    "clip-veri-ours": CLIP,
-    "resnet-v2-veri": RESNET,
-}
+MODELS = ("clip-ours", "clip-veri-ours", "resnet-v2-veri")
+
+
+def stage_arguments(name: str, args) -> list[str]:
+    if name.startswith("clip"):
+        return ["--architecture", "clip-vit-b16", "--lr", str(args.clip_lr),
+                "--backbone-lr", str(args.clip_backbone_lr), "--weight-decay", "1e-4"]
+    return ["--architecture", "resnet50-ibn", "--lr", str(args.resnet_lr)]
 
 
 def run(name: str, command: list[str], heartbeat: Path, done: Path) -> bool:
@@ -56,12 +58,16 @@ def run(name: str, command: list[str], heartbeat: Path, done: Path) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Дообучение ансамбля на 288")
+    parser = argparse.ArgumentParser(description="Дообучение ансамбля на другом размере входа")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "runs" / "res288")
-    parser.add_argument("--size", type=int, default=288)
+    parser.add_argument("--size", default="288",
+                        help="Вход сети: 288 (квадрат) или ВЫСОТАxШИРИНА, например 224x320")
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--clip-lr", type=float, default=3e-5)
+    parser.add_argument("--clip-backbone-lr", type=float, default=3e-6)
+    parser.add_argument("--resnet-lr", type=float, default=3.5e-5)
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -71,12 +77,13 @@ def main() -> None:
     started = time.perf_counter()
 
     checkpoints = []
-    for name, extra in STAGES.items():
+    for name in MODELS:
+        extra = stage_arguments(name, args)
         output = args.output / name
         source = ROOT / "models" / f"{name}.pt"
         command = [sys.executable, "-u", str(ROOT / "falcon" / "train.py"), str(args.dataset),
                    "--output", str(output), "--resume", str(source),
-                   "--input-size", str(args.size), "--epochs", str(args.epochs),
+                   "--input-size", args.size, "--epochs", str(args.epochs),
                    "--warmup-epochs", "2", "--seed", "42", "--split-seed", "42",
                    "--eval-every", "5", "--workers", str(args.workers),
                    "--plate-erase", "0.5", *extra]
@@ -106,6 +113,15 @@ def main() -> None:
                     str(args.dataset), "--checkpoints", *checkpoints,
                     "--projection", str(projection),
                     "--output", str(args.output / "threshold_choice.json")],
+                   cwd=ROOT, check=True)
+    # Вердикт — тем же скриптом, которым решается смена сдачи: точность с
+    # бутстрэпом, балл кандидатов при своём пороге, задержка и пропускная
+    # способность. Утром остаётся прочитать release_choice.json.
+    log("сравнение с нынешней сдачей")
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "compare_release.py"), str(args.dataset),
+                    "--candidate", *checkpoints, "--candidate-projection", str(projection),
+                    "--candidate-threshold-report", str(args.output / "threshold_choice.json"),
+                    "--output", str(args.output / "release_choice.json")],
                    cwd=ROOT, check=True)
     log(f"ГОТОВО за {(time.perf_counter() - started) / 3600:.2f} ч")
 

@@ -338,7 +338,8 @@ class ViTReID(nn.Module):
     ARCHITECTURE = "clip-vit-b16-bnneck-v1"
     BACKBONE = "vit_base_patch16_clip_224.openai"
 
-    def __init__(self, num_classes: int = 0, img_size: int = 256, pretrained: bool = False):
+    def __init__(self, num_classes: int = 0, img_size: int | tuple[int, int] = 256,
+                 pretrained: bool = False):
         super().__init__()
         import timm  # только для этой архитектуры; ResNet без timm работает
 
@@ -392,11 +393,13 @@ ARCHITECTURES = {
 
 def build_named(name: str, num_classes: int = 0, pretrained: bool = True,
                 embedding_dim: int = 2048, verbose: bool = True,
-                img_size: int = 256) -> nn.Module:
+                img_size: int | tuple[int, int] = 256) -> nn.Module:
     """Модель по короткому имени архитектуры: resnet50-ibn | clip-vit-b16.
 
     img_size важен только для ViT: у него позиционные эмбеддинги привязаны к
-    числу патчей. Свёрточная сеть работает с любым размером входа.
+    числу патчей. Может быть прямоугольным — (высота, ширина): кузов шире, чем
+    выше, и вход 224x320 не сжимает его в квадрат. Свёрточная сеть работает с
+    любым размером входа.
     """
     if name == "clip-vit-b16":
         return ViTReID(num_classes=num_classes, pretrained=pretrained, img_size=img_size)
@@ -407,7 +410,7 @@ def build_named(name: str, num_classes: int = 0, pretrained: bool = True,
 
 
 def build_for_checkpoint(architecture: str, num_classes: int, feature_dim: int,
-                         img_size: int = 256) -> nn.Module:
+                         img_size: int | tuple[int, int] = 256) -> nn.Module:
     """Пустая модель под чекпоинт: без загрузки предобученных весов и без сети."""
     if architecture not in ARCHITECTURES:
         raise ValueError(f"Чекпоинт собран неизвестной архитектурой: {architecture!r}")

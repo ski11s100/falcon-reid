@@ -283,12 +283,17 @@ def load_transferred_weights(model, checkpoint: Path, verbose: bool = True) -> d
             accepted[key] = value
         elif key.endswith("pos_embed") and value.ndim == 3:
             # Смена разрешения у ViT: позиционные эмбеддинги растягиваются на
-            # новое число патчей, а не выбрасываются. Иначе модель, обученная
-            # на 256, теряла бы всё пространственное знание при переходе на 288.
+            # новую сетку патчей, а не выбрасываются. Иначе модель, обученная
+            # на 256, теряла бы всё пространственное знание при переходе на
+            # другой вход. Сетка берётся у самой модели: при прямоугольном входе
+            # (224x320 -> 14x20 патчей) из одного числа патчей её не восстановить.
             from timm.layers import resample_abs_pos_embed
-            patches = current[key].shape[1] - 1
-            side = int(round(patches ** 0.5))
-            accepted[key] = resample_abs_pos_embed(value, [side, side], num_prefix_tokens=1)
+            grid = getattr(getattr(getattr(model, "backbone", None), "patch_embed", None),
+                           "grid_size", None)
+            if grid is None:
+                side = int(round((current[key].shape[1] - 1) ** 0.5))
+                grid = (side, side)
+            accepted[key] = resample_abs_pos_embed(value, list(grid), num_prefix_tokens=1)
             resized.append(key)
         else:
             rejected.append(key)
@@ -341,7 +346,7 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     # них ложится предобучение на стороннем наборе — ImageNet скачивать не нужно.
     model = build_named(config.architecture, num_classes=len(labels),
                         pretrained=resume is None, embedding_dim=config.embedding_dim,
-                        img_size=config.size[0])
+                        img_size=config.size)
     if resume is not None:
         load_transferred_weights(model, resume)
     model.set_gradient_checkpointing(config.grad_checkpointing)
@@ -503,6 +508,22 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     return {"best_mAP@10": best_map, "epochs": config.epochs, "output": str(output_dir)}
 
 
+def parse_size(text: str) -> tuple[int, int]:
+    """«256» -> (256, 256), «224x320» -> (224, 320): высота, затем ширина.
+
+    Обе стороны должны делиться на 16 — размер патча ViT-B/16.
+    """
+    parts = str(text).lower().replace("×", "x").split("x")
+    if len(parts) == 1:
+        parts = parts * 2
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(f"размер {text!r}: нужно 256 или 224x320")
+    height, width = (int(p) for p in parts)
+    if height % 16 or width % 16:
+        raise argparse.ArgumentTypeError(f"размер {text!r}: стороны должны делиться на 16")
+    return height, width
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Обучение ReID-энкодера ФАЛЬКОН")
     parser.add_argument("dataset", type=Path, help="Каталог с train.csv и images/")
@@ -516,8 +537,9 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--input-size", type=int, default=DEFAULT_SIZE[0],
-                        help="Сторона квадратного входа: 256 в базовом рецепте, 288 — мелкие детали")
+    parser.add_argument("--input-size", type=parse_size, default=DEFAULT_SIZE,
+                        help="Вход сети: 256 (квадрат) или ВЫСОТАxШИРИНА, например 224x320 — "
+                             "кузов не сжимается в квадрат")
     parser.add_argument("--plate-erase", type=float, default=0.0,
                         help="Доля кадров с закрашенной зоной номера при обучении")
     parser.add_argument("--no-amp", action="store_true")
@@ -551,7 +573,7 @@ def main() -> None:
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
         plate_erase=args.plate_erase,
-        size=(args.input_size, args.input_size),
+        size=args.input_size,
     )
     result = train(args.dataset, args.output, config, device=args.device, resume=args.resume,
                    csv_path=args.csv, images_dir=args.images)

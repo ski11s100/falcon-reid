@@ -692,7 +692,7 @@ def load_checkpoint(path: Path | str) -> tuple[VehicleReID, dict]:
     # привязаны к числу патчей, и модель, обученная на 288, не соберётся под 256.
     size = tuple(state.get("preprocessing", {}).get("size") or DEFAULT_SIZE)
     model = build_for_checkpoint(state.get("architecture"), state.get("num_classes", 0),
-                                 state.get("feature_dim", 2048), img_size=size[0])
+                                 state.get("feature_dim", 2048), img_size=(int(size[0]), int(size[1])))
     model.load_state_dict(state["model"], strict=True)
     return model, {**state.get("metadata", {}),
                    "preprocessing": state.get("preprocessing", {"size": list(size)})}
