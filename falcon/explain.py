@@ -209,6 +209,29 @@ def plate_masking_boxes(width: int, height: int) -> dict[str, tuple[int, int, in
     }
 
 
+PLATE_CHECK_MARGIN = 0.02
+
+
+def plate_check_verdict(plate_drop: float, worst_control: float,
+                        margin: float = PLATE_CHECK_MARGIN) -> tuple[bool, str]:
+    """Вывод проверки одной пары: опирается ли сходство на зону номера.
+
+    Одна пара шумит: падение сходства зависит от ракурса и того, что попало
+    в зоны. Поэтому «опирается» — только если номер роняет сходство сильнее
+    худшей контрольной зоны больше чем на margin. Промежуточный случай
+    называется прямо, а не «не опирается»: иначе оператор видит 0.044 против
+    0.024 и вывод, который с числами не вяжется.
+    """
+    numbers = (f"закрашивание зоны номера снижает сходство на {plate_drop:.3f}, "
+               f"контрольных зон — до {worst_control:.3f}")
+    if plate_drop <= worst_control:
+        return False, f"{numbers}: номер важен не больше кузова, модель на него не опирается"
+    if plate_drop <= worst_control + margin:
+        return False, (f"{numbers}: разница в пределах погрешности одной пары ({margin:.2f}); "
+                       "на выборке закраска номера стоит не больше закраски кузова")
+    return True, f"{numbers}: зона номера влияет заметно сильнее, случай для разбора"
+
+
 def mask_region(images: torch.Tensor, mask: np.ndarray, fill: float = 0.0) -> torch.Tensor:
     """Закрашивает область тензора — имитация контрольной версии организаторов."""
     masked = images.clone()

@@ -29,7 +29,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
 
-from falcon.explain import GradCAM, overlay_heatmap, plate_attention, plate_masking_boxes
+from falcon.explain import (GradCAM, overlay_heatmap, plate_attention, plate_check_verdict,
+                            plate_masking_boxes)
 from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
 from falcon.model import VehicleReID, ViTReID
 from falcon.submit import SubmissionConfig, enrich_vectors
@@ -562,11 +563,7 @@ def plate_check(extractor, crop: Image.Image, unit_reference: np.ndarray) -> Pla
     drops = {name: round(base - float(score), 4) for name, score in zip(boxes, scores[1:])}
     plate_drop = drops.pop("зона номера")
     worst_control = max(drops.values())
-    relies = plate_drop > worst_control + 0.02
-    verdict = (f"закрашивание зоны номера снижает сходство на {plate_drop:.3f}, "
-               f"контрольных зон — до {worst_control:.3f}: "
-               + ("зона номера влияет заметно сильнее, случай для разбора" if relies
-                  else "модель на номер не опирается"))
+    relies, verdict = plate_check_verdict(plate_drop, worst_control)
     return PlateCheck(similarity=round(base, 6), drops={"зона номера": plate_drop, **drops},
                       relies_on_plate=relies, verdict=verdict)
 
