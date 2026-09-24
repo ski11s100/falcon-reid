@@ -29,7 +29,7 @@ const state = {
   history: [],          // недавние запросы этого сеанса
 };
 
-const scene = window.CityScene ? new CityScene($("map"), $("ticker")) : null;
+const scene = window.CityScene ? new CityScene($("map")) : null;
 
 scene?.start();
 // Щелчок по снимку кандидата на схеме открывает то же окно сравнения.

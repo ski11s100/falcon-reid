@@ -171,16 +171,14 @@
     }
 
     /* Где поместится карточка снимка у камеры: над ней, под ней или нигде.
-     * Нельзя закрывать панели, края холста и подпись внизу по центру. */
+     * Нельзя закрывать панели и края холста. */
     placement(u, v) {
       const [x, y] = this.project(u, v);
-      const ticker = { left: this.width / 2 - 330, right: this.width / 2 + 330, top: this.height - 44 };
       const fits = (top) => {
         const card = { left: x - CARD.w / 2, right: x + CARD.w / 2, top, bottom: top + CARD.h };
         if (card.left < 6 || card.right > this.width - 6 || card.top < 6 || card.bottom > this.height - 6) {
           return false;
         }
-        if (card.bottom > ticker.top && card.right > ticker.left && card.left < ticker.right) return false;
         return !(this.obstacles || []).some((r) =>
           card.left < r.right && card.right > r.left && card.top < r.bottom && card.bottom > r.top);
       };
