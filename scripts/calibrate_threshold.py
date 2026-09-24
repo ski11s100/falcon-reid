@@ -166,11 +166,17 @@ def main() -> None:
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
     parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION)
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "threshold_choice.json")
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение (build_local_split); "
+                             "калибровка идёт на остальных")
+    parser.add_argument("--test-gallery-per-query", type=float, default=None,
+                        help="Размер прореженной галереи как доля от числа запросов (в публичном "
+                             "тесте 750/1110 = 0.676); нужен, когда проверочная выборка мала")
     args = parser.parse_args()
 
     official = load_official()
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
-    base = build_local_split(rows, seed=42)
+    base = build_local_split(rows, seed=42, extra_train_share=args.extra_train_share)
 
     # Векторы считаются один раз: разбиения тасуют одни и те же снимки.
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
@@ -184,9 +190,12 @@ def main() -> None:
     splits = [("основное", base)]
     for partition in args.partitions:
         splits.append((f"жеребьёвка {partition}",
-                       build_local_split(rows, seed=42, partition_seed=partition)))
+                       build_local_split(rows, seed=42, partition_seed=partition,
+                                         extra_train_share=args.extra_train_share)))
 
-    dense_name = "наша галерея (1541 снимок)"
+    if args.test_gallery_per_query:
+        args.test_gallery = round(len(base.query) * args.test_gallery_per_query)
+    dense_name = f"наша галерея ({len(base.gallery)} снимков)"
     sparse_name = f"как в тесте ({args.test_gallery} снимков)"
     per_run: dict[str, np.ndarray] = {}
     families: dict[str, list[np.ndarray]] = {dense_name: [], sparse_name: []}
