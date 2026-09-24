@@ -164,6 +164,9 @@ def threshold_from(report: Path | None, default: float) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сдача против кандидата: менять или нет")
     parser.add_argument("dataset", type=Path)
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение (build_local_split); "
+                             "оценка идёт на остальных")
     parser.add_argument("--candidate", type=Path, nargs="+", required=True,
                         help="Чекпойнты кандидата (например, runs/res288/models/*.pt)")
     parser.add_argument("--candidate-projection", type=Path, default=None)
@@ -181,7 +184,7 @@ def main() -> None:
 
     official = load_official()
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
-    split = build_local_split(rows, seed=42)
+    split = build_local_split(rows, seed=42, extra_train_share=args.extra_train_share)
 
     candidate_threshold = args.candidate_threshold
     if candidate_threshold is None:

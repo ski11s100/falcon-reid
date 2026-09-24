@@ -68,7 +68,15 @@ def main() -> None:
     parser.add_argument("--clip-lr", type=float, default=3e-5)
     parser.add_argument("--clip-backbone-lr", type=float, default=3e-6)
     parser.add_argument("--resnet-lr", type=float, default=3.5e-5)
+    parser.add_argument("--plate-erase", default="0.5")
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение; все проверки идут на "
+                             "остальных, которых модель не видела")
+    parser.add_argument("--quick", action="store_true",
+                        help="Только обучение, проекция и сравнение со сдачей — без сверки, "
+                             "проверки закраской и калибровки порога")
     args = parser.parse_args()
+    share = ["--extra-train-share", str(args.extra_train_share)]
 
     args.output.mkdir(parents=True, exist_ok=True)
     exported = args.output / "models"
@@ -86,7 +94,7 @@ def main() -> None:
                    "--input-size", args.size, "--epochs", str(args.epochs),
                    "--warmup-epochs", "2", "--seed", "42", "--split-seed", "42",
                    "--eval-every", "5", "--workers", str(args.workers),
-                   "--plate-erase", "0.5", *extra]
+                   "--plate-erase", args.plate_erase, *share, *extra]
         if not run(name, command, output / "heartbeat.json", output / "last.pt"):
             sys.exit(f"{name}: не удалось обучить")
         target = exported / f"{name}.pt"
@@ -97,14 +105,24 @@ def main() -> None:
     log("PCA-проекция под новые веса")
     projection = args.output / "projection.pt"
     subprocess.run([sys.executable, str(ROOT / "scripts" / "fit_projection.py"), str(args.dataset),
-                    "--checkpoints", *checkpoints, "--output", str(projection)], cwd=ROOT, check=True)
+                    "--checkpoints", *checkpoints, "--output", str(projection), *share],
+                   cwd=ROOT, check=True)
+
+    if args.quick:
+        log("сравнение с нынешней сдачей (быстрый режим, порог сдачи)")
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "compare_release.py"), str(args.dataset),
+                        "--candidate", *checkpoints, "--candidate-projection", str(projection),
+                        "--output", str(args.output / "release_choice.json"), *share],
+                       cwd=ROOT, check=True)
+        log(f"ГОТОВО за {(time.perf_counter() - started) / 3600:.2f} ч")
+        return
 
     log("проверки")
     for script, name in (("verify_official.py", "official_check.json"),
                          ("plate_masking_check.py", "plate_masking_check.json")):
         subprocess.run([sys.executable, str(ROOT / "scripts" / script), str(args.dataset),
                         "--checkpoints", *checkpoints, "--projection", str(projection),
-                        "--output", str(args.output / name)], cwd=ROOT, check=True)
+                        "--output", str(args.output / name), *share], cwd=ROOT, check=True)
 
     # Порог зависит от модели: у новых весов шкала сходства своя. Считаем его
     # здесь же, чтобы утром сравнивать варианты по их собственным порогам.
@@ -121,7 +139,7 @@ def main() -> None:
     subprocess.run([sys.executable, str(ROOT / "scripts" / "compare_release.py"), str(args.dataset),
                     "--candidate", *checkpoints, "--candidate-projection", str(projection),
                     "--candidate-threshold-report", str(args.output / "threshold_choice.json"),
-                    "--output", str(args.output / "release_choice.json")],
+                    "--output", str(args.output / "release_choice.json"), *share],
                    cwd=ROOT, check=True)
     log(f"ГОТОВО за {(time.perf_counter() - started) / 3600:.2f} ч")
 

@@ -56,6 +56,24 @@ class TestLocalSplit(unittest.TestCase):
         self.assertNotEqual(base_queries, other_queries)
         self.assertNotEqual(set(self.base.open_set_query_ids), set(other.open_set_query_ids))
 
+    def test_extra_train_share_moves_identities_into_training(self):
+        """Часть отложенных машин уходит в обучение, остальные — чистая проверка."""
+        more = build_local_split(self.rows, seed=42, extra_train_share=0.5)
+        base_train = {r.vehicle_id for r in self.base.train}
+        more_train = {r.vehicle_id for r in more.train}
+        held_out = {r.vehicle_id for r in more.query} | {r.vehicle_id for r in more.gallery}
+        base_held = {r.vehicle_id for r in self.base.query} | {r.vehicle_id for r in self.base.gallery}
+        self.assertTrue(base_train < more_train)          # обучение только выросло
+        self.assertFalse(more_train & held_out)             # и не видит проверочных машин
+        self.assertTrue(held_out <= base_held)              # проверка — из прежних отложенных
+
+    def test_checked_identities_do_not_depend_on_share(self):
+        """Проверочные машины берутся с конца списка: варианты сравнимы напрямую."""
+        small = build_local_split(self.rows, seed=42, extra_train_share=0.75)
+        smaller = build_local_split(self.rows, seed=42, extra_train_share=0.5)
+        held = lambda s: {r.vehicle_id for r in s.query} | {r.vehicle_id for r in s.gallery}
+        self.assertTrue(held(small) <= held(smaller))
+
     def test_default_behaviour_is_unchanged(self):
         again = build_local_split(self.rows, seed=42)
         self.assertEqual([r.image_id for r in self.base.query], [r.image_id for r in again.query])

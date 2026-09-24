@@ -42,6 +42,9 @@ def sha256(path: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="PCA-проекция вектора ансамбля")
     parser.add_argument("dataset", type=Path)
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение (build_local_split); "
+                             "оценка идёт на остальных")
     parser.add_argument("--dim", type=int, default=256)
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
@@ -49,7 +52,7 @@ def main() -> None:
     args = parser.parse_args()
 
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
-    split = build_local_split(rows, seed=42)
+    split = build_local_split(rows, seed=42, extra_train_share=args.extra_train_share)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
                                                                   flip_tta=SUBMISSION_FLIP_TTA))
     vectors = extractor.extract(split.train, progress=False).astype(np.float64)

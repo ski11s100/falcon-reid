@@ -52,6 +52,9 @@ def masked(transform, box):
 def main() -> None:
     parser = argparse.ArgumentParser(description="mAP@10 при закрашенной зоне номера")
     parser.add_argument("dataset", type=Path)
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение (build_local_split); "
+                             "оценка идёт на остальных")
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
     parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
@@ -61,7 +64,7 @@ def main() -> None:
     args = parser.parse_args()
 
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
-    split = build_local_split(rows, seed=42)
+    split = build_local_split(rows, seed=42, extra_train_share=args.extra_train_share)
     qids = [r.image_id for r in split.query]
     gids = [r.image_id for r in split.gallery]
     q_labels = {r.image_id: Identity(r.vehicle_id, r.camera_id) for r in split.query}

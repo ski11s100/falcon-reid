@@ -73,6 +73,9 @@ class TrainConfig:
     # сравнении на общем сплите это давало утечку и завышало результат.
     # Разнообразие берём из зерна обучения, а разбиение у всех одно.
     split_seed: int = 42
+    # Доля отложенных машин, отданная в обучение (falcon/data.build_local_split).
+    # 0.0 — прежнее поведение: обучение не видит ни одной отложенной машины.
+    extra_train_share: float = 0.0
     eval_every: int = 2
     # На 6 ГБ видеопамяти окупается всегда: батч 64 иначе уходит в
     # вытеснение и замедляется восьмикратно (см. autoconfigure_batch).
@@ -329,7 +332,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
     dataset_audit = audit(rows)
     print(json.dumps({"audit": dataset_audit}, ensure_ascii=False), flush=True)
 
-    split = build_local_split(rows, seed=config.split_seed)
+    split = build_local_split(rows, seed=config.split_seed,
+                              extra_train_share=config.extra_train_share)
     print(json.dumps({"split": split.summary()}, ensure_ascii=False), flush=True)
     (output_dir / "split.json").write_text(json.dumps({
         "train_ids": sorted({r.vehicle_id for r in split.train}),
@@ -546,6 +550,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--split-seed", type=int, default=42,
                         help="Зерно разбиения на обучение и проверку")
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение: 0.75 — учиться на них, "
+                             "проверяться на оставшейся четверти")
     parser.add_argument("--eval-every", type=int, default=2,
                         help="Валидировать каждые N эпох")
     parser.add_argument("--no-checkpointing", action="store_true")
@@ -566,6 +573,7 @@ def main() -> None:
         amp=not args.no_amp,
         seed=args.seed,
         split_seed=args.split_seed,
+        extra_train_share=args.extra_train_share,
         eval_every=args.eval_every,
         grad_checkpointing=not args.no_checkpointing,
         architecture=args.architecture,

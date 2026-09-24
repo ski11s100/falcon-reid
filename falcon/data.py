@@ -213,6 +213,7 @@ def build_local_split(
     query_share: float = 0.35,
     seed: int = 42,
     partition_seed: int | None = None,
+    extra_train_share: float = 0.0,
 ) -> LocalSplit:
     """Режет train.csv на обучение и локальный тест по протоколу организаторов.
 
@@ -231,6 +232,13 @@ def build_local_split(
     open-set, оставляя обучающие машины прежними. Это нужно для проверки
     устойчивости: прирост метрики не должен зависеть от одной случайной
     жеребьёвки. По умолчанию (None) поведение в точности прежнее.
+
+    extra_train_share отдаёт в обучение часть отложенных машин. Нужен, чтобы
+    измерить, сколько даёт увеличение обучающей выборки: при 0.75 обучение
+    видит три четверти отложенных машин, а проверка идёт на оставшейся
+    четверти, которой модель по-прежнему не видела. Машины для проверки
+    берутся с конца списка, поэтому при любой доле это одни и те же машины —
+    варианты можно сравнивать напрямую. По умолчанию (0.0) поведение прежнее.
     """
     if not 0 < val_identity_fraction < 1 or not 0 <= open_set_fraction < 1:
         raise ValueError("Доли должны лежать в (0, 1)")
@@ -254,6 +262,12 @@ def build_local_split(
     val_ids = multi_camera[:val_size]
 
     train_ids = set(multi_camera[val_size:]) | set(single_camera)
+    if extra_train_share > 0:
+        if not 0 < extra_train_share < 1:
+            raise ValueError("extra_train_share должна лежать в (0, 1)")
+        moved = min(round(len(val_ids) * extra_train_share), len(val_ids) - 4)
+        train_ids |= set(val_ids[:moved])
+        val_ids = val_ids[moved:]
     train = [r for r in rows if r.vehicle_id in train_ids]
 
     # Сколько ID отдать под open-set. Доля считается по ЗАПРОСАМ (ответ 17), а
