@@ -263,9 +263,11 @@ def build_local_split(
 
     train_ids = set(multi_camera[val_size:]) | set(single_camera)
     if extra_train_share > 0:
-        if not 0 < extra_train_share < 1:
-            raise ValueError("extra_train_share должна лежать в (0, 1)")
-        moved = min(round(len(val_ids) * extra_train_share), len(val_ids) - 4)
+        if not 0 < extra_train_share <= 1:
+            raise ValueError("extra_train_share должна лежать в (0, 1]")
+        # 1.0 — итоговая модель на всех машинах: проверять её тогда не на чем.
+        moved = (len(val_ids) if extra_train_share == 1
+                 else min(round(len(val_ids) * extra_train_share), len(val_ids) - 4))
         train_ids |= set(val_ids[:moved])
         val_ids = val_ids[moved:]
     train = [r for r in rows if r.vehicle_id in train_ids]

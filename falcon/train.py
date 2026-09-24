@@ -480,7 +480,8 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             **{k: round(v / len(sampler), 4) for k, v in running.items()},
         }
 
-        if epoch % config.eval_every == 0 or epoch == config.epochs:
+        # Без отложенных машин (extra_train_share=1.0) проверять не на чем.
+        if split.query and (epoch % config.eval_every == 0 or epoch == config.epochs):
             record["validation"] = validate(model, split.gallery, split.query, config, device)
             current = record["validation"]["mAP@10"]
             if current > best_map:
@@ -505,6 +506,15 @@ def train(dataset_dir: Path, output_dir: Path, config: TrainConfig,
             "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
         })
 
+    if not split.query:
+        # Модель на всех машинах: лучшей по проверке не выбрать, берётся
+        # последняя эпоха. Рецепт и число эпох зафиксированы заранее прогоном
+        # с отложенной четвертью (--extra-train-share 0.75).
+        save_checkpoint(model, output_dir / "best.pt", size=config.size, metadata={
+            "epoch": config.epochs, "validation": None,
+            "note": "обучено на всех размеченных машинах, отложенной проверки нет",
+            "dataset_audit": dataset_audit, "split": split.summary(), "config": asdict(config),
+        })
     save_checkpoint(model, output_dir / "last.pt", size=config.size,
                     metadata={"epoch": config.epochs})
     # Обучение завершено, продолжать нечего, а 300 МБ состояния на модель лишние.

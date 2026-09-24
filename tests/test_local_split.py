@@ -74,6 +74,13 @@ class TestLocalSplit(unittest.TestCase):
         held = lambda s: {r.vehicle_id for r in s.query} | {r.vehicle_id for r in s.gallery}
         self.assertTrue(held(small) <= held(smaller))
 
+    def test_full_share_trains_on_every_identity(self):
+        """Итоговая модель на всех машинах: проверочной выборки нет совсем."""
+        full = build_local_split(self.rows, seed=42, extra_train_share=1.0)
+        self.assertEqual({r.vehicle_id for r in full.train}, {r.vehicle_id for r in self.rows})
+        self.assertEqual(full.query, [])
+        self.assertEqual(full.gallery, [])
+
     def test_default_behaviour_is_unchanged(self):
         again = build_local_split(self.rows, seed=42)
         self.assertEqual([r.image_id for r in self.base.query], [r.image_id for r in again.query])
