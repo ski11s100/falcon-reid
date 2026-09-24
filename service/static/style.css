@@ -70,37 +70,65 @@ button, input { font: inherit; color: inherit; }
   z-index: 2;
 }
 
-/* Знак и слово: у заказчика это сокол, поэтому в шестиграннике — крыло.
- * Слово набрано крупно и залито градиентом: логотип должен читаться первым. */
+/* Логотип заказчика — официальный SVG с st-falcon.ru, светлый вариант для
+ * тёмного фона. Ничего не перерисовываем: у бренда есть свой знак. */
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 11px;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.brand__mark {
-  width: 34px;
-  height: 34px;
   flex: none;
-  filter: drop-shadow(0 0 10px rgba(79, 140, 255, 0.45));
 }
 
-.brand__word {
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 22px;
-  line-height: 1;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  background: linear-gradient(94deg, #ffffff 12%, #bfe0ff 54%, #6aa6ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+.brand__logo {
+  height: 20px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 0 12px rgba(124, 196, 255, 0.28));
+  transition: filter 0.25s ease;
 }
 
-.brand:hover .brand__mark { filter: drop-shadow(0 0 14px rgba(124, 196, 255, 0.7)); }
+.brand:hover .brand__logo { filter: drop-shadow(0 0 16px rgba(124, 196, 255, 0.55)); }
+
+/* Бегущая строка: ключевые числа решения идут лентой под показателями.
+ * Две одинаковые половины и сдвиг на 50% дают бесшовный цикл. */
+.marquee {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, rgba(79, 140, 255, 0.10), rgba(124, 196, 255, 0.04) 40%, rgba(79, 140, 255, 0.10));
+  padding: 7px 0;
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+.marquee__track {
+  display: flex;
+  width: max-content;
+  animation: marquee 48s linear infinite;
+}
+
+.marquee__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.marquee__row b { color: var(--text); font-family: var(--display); font-weight: 500; }
+.marquee__row i { color: var(--blue); font-style: normal; opacity: 0.7; }
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* Уважаем системную настройку «меньше движения»: лента замирает. */
+@media (prefers-reduced-motion: reduce) {
+  .marquee__track { animation: none; }
+}
+
 
 .topbar__product { color: var(--text-3); font-size: 13px; }
 
@@ -147,12 +175,30 @@ button, input { font: inherit; color: inherit; }
   align-items: start;
 }
 
+/* Панели — «стекло»: полупрозрачная поверхность с размытием фона и светлой
+ * кромкой сверху. Фон под ними (схема города) чуть просвечивает, и интерфейс
+ * перестаёт выглядеть набором плоских прямоугольников. */
 .panel {
+  position: relative;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: var(--surface);
+  background: linear-gradient(180deg, rgba(23, 31, 45, 0.82), rgba(15, 20, 30, 0.88));
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  box-shadow: 0 18px 40px rgba(4, 7, 12, 0.35);
   min-width: 0;
+}
+
+/* Светящаяся кромка по верхнему краю панели. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, transparent, rgba(124, 196, 255, 0.45), transparent);
+  pointer-events: none;
 }
 
 .result-empty { padding: 26px 10px 22px; text-align: center; }
@@ -568,8 +614,8 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rg
   .metrics { flex-wrap: wrap; row-gap: 10px; gap: 16px; }
   .metrics__group { gap: 16px; padding-right: 16px; }
   .metrics__title { display: none; }
-  .brand__word { font-size: 18px; }
-  .brand__mark { width: 28px; height: 28px; }
+  .brand__logo { height: 16px; }
+  .marquee__row { font-size: 11px; }
 }
 
 @media (max-width: 480px) {
