@@ -52,6 +52,23 @@ def summary(directory: Path) -> dict:
     }
 
 
+def compare(current_dir: Path, candidate_dir: Path) -> dict:
+    current = read_rankings(current_dir / "submission.csv")
+    candidate = read_rankings(candidate_dir / "submission.csv")
+    if current.keys() != candidate.keys():
+        raise ValueError("в сдачах разные наборы запросов")
+
+    same_top1 = sum(current[q][0] == candidate[q][0] for q in current)
+    overlap = np.mean([len(set(current[q]) & set(candidate[q])) / len(current[q]) for q in current])
+    return {
+        "queries": len(current),
+        "top1_agreement": round(same_top1 / len(current), 4),
+        "top10_overlap": round(float(overlap), 4),
+        "current": summary(current_dir),
+        "candidate": summary(candidate_dir),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сверка двух сдач без разметки")
     parser.add_argument("current", type=Path)
@@ -59,21 +76,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    current = read_rankings(args.current / "submission.csv")
-    candidate = read_rankings(args.candidate / "submission.csv")
-    if current.keys() != candidate.keys():
-        raise SystemExit("в сдачах разные наборы запросов")
-
-    same_top1 = sum(current[q][0] == candidate[q][0] for q in current)
-    overlap = np.mean([len(set(current[q]) & set(candidate[q])) / len(current[q]) for q in current])
-    report = {
-        "queries": len(current),
-        "top1_agreement": round(same_top1 / len(current), 4),
-        "top10_overlap": round(float(overlap), 4),
-        "current": summary(args.current),
-        "candidate": summary(args.candidate),
-    }
-    text = json.dumps(report, ensure_ascii=False, indent=2)
+    text = json.dumps(compare(args.current, args.candidate), ensure_ascii=False, indent=2)
     print(text)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")
