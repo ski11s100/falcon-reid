@@ -72,6 +72,8 @@ def main() -> None:
     parser.add_argument("--extra-train-share", type=float, default=0.0,
                         help="Доля отложенных машин, отданная в обучение; все проверки идут на "
                              "остальных, которых модель не видела")
+    parser.add_argument("--resume-dir", type=Path, default=ROOT / "models",
+                        help="Откуда стартует дообучение; по умолчанию — веса нынешней сдачи")
     parser.add_argument("--quick", action="store_true",
                         help="Только обучение, проекция и сравнение со сдачей — без сверки, "
                              "проверки закраской и калибровки порога")
@@ -88,7 +90,7 @@ def main() -> None:
     for name in MODELS:
         extra = stage_arguments(name, args)
         output = args.output / name
-        source = ROOT / "models" / f"{name}.pt"
+        source = args.resume_dir / f"{name}.pt"
         command = [sys.executable, "-u", str(ROOT / "falcon" / "train.py"), str(args.dataset),
                    "--output", str(output), "--resume", str(source),
                    "--input-size", args.size, "--epochs", str(args.epochs),
@@ -107,6 +109,23 @@ def main() -> None:
     subprocess.run([sys.executable, str(ROOT / "scripts" / "fit_projection.py"), str(args.dataset),
                     "--checkpoints", *checkpoints, "--output", str(projection), *share],
                    cwd=ROOT, check=True)
+
+    if args.extra_train_share >= 1:
+        # Все размеченные машины ушли в обучение, проверять не на чем: рецепт
+        # проверен прогоном с долей 0.75. Остаётся поймать поломку — собрать
+        # сдачу на публичном тесте и сверить её с нынешней.
+        log("сдача на публичном тесте и сверка с нынешней")
+        candidate = args.output / "submission"
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "run_submission.py"), str(args.dataset),
+                        "--output", str(candidate), "--checkpoints", *checkpoints,
+                        "--projection", str(projection), "--workers", str(args.workers)],
+                       cwd=ROOT, check=True)
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "compare_submissions.py"),
+                        str(ROOT / "submission"), str(candidate),
+                        "--output", str(args.output / "submission_agreement.json")],
+                       cwd=ROOT, check=True)
+        log(f"ГОТОВО за {(time.perf_counter() - started) / 3600:.2f} ч")
+        return
 
     if args.quick:
         log("сравнение с нынешней сдачей (быстрый режим, порог сдачи)")

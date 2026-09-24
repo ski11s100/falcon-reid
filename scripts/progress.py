@@ -118,6 +118,20 @@ NIGHT_STEPS = (("экспорт весов в fp16", "models/resnet-v2-veri.pt")
                ("порог отказа", "threshold_choice.json"),
                ("сравнение со сдачей", "release_choice.json"))
 STEPS_SECONDS = 25 * 60        # проверки после обучения, по прошлым ночам
+# Обучение на всех размеченных машинах: проверять не на чем, после обучения
+# только сдача на публичном тесте и её сверка с нынешней.
+FULL_DATA_STEPS = (("экспорт весов в fp16", "models/resnet-v2-veri.pt"),
+                   ("PCA-проекция", "projection.pt"),
+                   ("сдача на публичном тесте", "submission/manifest.json"),
+                   ("сверка с нынешней сдачей", "submission_agreement.json"))
+FULL_DATA_STEPS_SECONDS = 8 * 60
+
+
+def night_steps(night: Path) -> tuple[tuple, int]:
+    config = read_json(night / NIGHT_MODELS[0] / "config.json") or {}
+    if (config.get("extra_train_share") or 0) >= 1:
+        return FULL_DATA_STEPS, FULL_DATA_STEPS_SECONDS
+    return NIGHT_STEPS, STEPS_SECONDS
 
 
 def night_root(run: Path) -> Path | None:
@@ -144,6 +158,7 @@ def model_state(folder: Path) -> dict:
 def render_night(night: Path, width: int) -> str:
     """Сводка всей ночи: три модели, проверки, время до конца и вердикт."""
     states = {name: model_state(night / name) for name in NIGHT_MODELS}
+    steps, steps_seconds = night_steps(night)
     lines = [f"{BOLD}ФАЛЬКОН — ночное обучение{RESET}   {GREY}{time.strftime('%H:%M:%S')}{RESET}",
              f"{GREY}{night}{RESET}", ""]
 
@@ -158,10 +173,10 @@ def render_night(night: Path, width: int) -> str:
         units_done += done_epochs * per_epoch
         units_total += total * per_epoch
         remaining += (total - done_epochs) * per_epoch
-    steps_done = sum((night / marker).is_file() for _, marker in NIGHT_STEPS)
-    units_total += STEPS_SECONDS
-    units_done += STEPS_SECONDS * steps_done / len(NIGHT_STEPS)
-    remaining += STEPS_SECONDS * (1 - steps_done / len(NIGHT_STEPS))
+    steps_done = sum((night / marker).is_file() for _, marker in steps)
+    units_total += steps_seconds
+    units_done += steps_seconds * steps_done / len(steps)
+    remaining += steps_seconds * (1 - steps_done / len(steps))
     overall = units_done / units_total if units_total else 0.0
     finish = time.strftime("%H:%M", time.localtime(time.time() + remaining))
     lines.append(f"{BOLD}Вся ночь{RESET}   {bar(overall, width - 28, GREEN)} {overall * 100:5.1f}%")
@@ -178,7 +193,7 @@ def render_night(night: Path, width: int) -> str:
         quality = f"   mAP@10 лучшее {state['best']:.4f}" if state["best"] is not None else ""
         lines.append(f"  {colour}{mark} {name:<16}{RESET} {text}{GREEN}{quality}{RESET}")
     lines.append("")
-    for title, marker in NIGHT_STEPS:
+    for title, marker in steps:
         ready = (night / marker).is_file()
         lines.append(f"  {GREEN + '✓' if ready else GREY + '·'} {title}{RESET}")
 
@@ -193,6 +208,13 @@ def render_night(night: Path, width: int) -> str:
                   f"против {current.get('балл кандидатов')}"]
         for reason in verdict.get("причины", []):
             lines.append(f"  {GREY}— {reason}{RESET}")
+    agreement = read_json(night / "submission_agreement.json")
+    if agreement:
+        lines += ["", f"{BOLD}Сверка с нынешней сдачей:{RESET} первый кандидат совпал в "
+                      f"{agreement['top1_agreement'] * 100:.1f}% запросов, десятки — на "
+                      f"{agreement['top10_overlap'] * 100:.1f}%; отказов "
+                      f"{agreement['candidate']['refusal_rate'] * 100:.1f}% против "
+                      f"{agreement['current']['refusal_rate'] * 100:.1f}%"]
     return "\n".join(lines)
 
 
