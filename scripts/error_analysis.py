@@ -113,12 +113,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "error_analysis")
     parser.add_argument("--checkpoints", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
+    parser.add_argument("--extra-train-share", type=float, default=0.0,
+                        help="Доля отложенных машин, отданная в обучение (build_local_split); "
+                             "разбор идёт на остальных")
     parser.add_argument("--projection", type=Path, default=ROOT / SUBMISSION_PROJECTION,
                         help="PCA-проекция вектора ансамбля; --projection none — без неё")
     args = parser.parse_args()
 
     rows = read_manifest(args.dataset / "train.csv", args.dataset / "images", require_labels=True)
-    split = build_local_split(rows, seed=42)
+    split = build_local_split(rows, seed=42, extra_train_share=args.extra_train_share)
     extractor = build_extractor(args.checkpoints, ExtractorConfig(num_workers=8, threads=True,
                                                                   flip_tta=SUBMISSION_FLIP_TTA),
                                 projection=None if str(args.projection).lower() == "none"

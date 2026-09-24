@@ -58,7 +58,7 @@ COPY models ./models
 # По умолчанию — тот же ансамбль и порог, что в сдаче и в docker-compose:
 # порог откалиброван под этот состав моделей и на одну модель не переносится.
 ENV FALCON_CHECKPOINTS=/opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-veri-ours.pt,/opt/falcon/models/resnet-v2-veri.pt \
-    FALCON_MATCH_THRESHOLD=0.605 \
+    FALCON_MATCH_THRESHOLD=0.69 \
     FALCON_PROJECTION=/opt/falcon/models/projection.pt \
     FALCON_FLIP_TTA=false \
     FALCON_DEVICE=cuda \

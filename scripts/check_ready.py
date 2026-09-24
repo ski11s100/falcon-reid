@@ -109,6 +109,13 @@ def check_metrics(report: Report) -> None:
         report.points["точность"] = accuracy
         report.note("mAP@10", f"{ranking['mAP@10']:.4f}  ->  {accuracy:.1f} балла из 45")
         report.note("Rank-1 / Rank-5", f"{ranking['Rank-1']:.4f} / {ranking['Rank-5']:.4f}")
+        scored = ranking.get("n_scored", 0)
+        if scored and scored < 500:
+            # Модели сдачи видели три четверти отложенных машин, и проверка идёт
+            # на оставшихся: галерея там маленькая, а mAP@10 — выше, чем будет
+            # на закрытом тесте. Балл выше — оценка сверху, а не прогноз.
+            report.note("оговорка", f"проверка на {scored} запросах с маленькой галереей: "
+                                    "балл за точность — оценка сверху")
         report.check(official["ranking"]["совпадает"], "наш код совпадает с эталонным скриптом")
 
         mode = official["режим кандидатов"]

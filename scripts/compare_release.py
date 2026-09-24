@@ -177,6 +177,9 @@ def main() -> None:
     parser.add_argument("--current", type=Path, nargs="+",
                         default=[ROOT / p for p in SUBMISSION_CHECKPOINTS])
     parser.add_argument("--current-projection", type=Path, default=ROOT / SUBMISSION_PROJECTION)
+    parser.add_argument("--current-threshold-report", type=Path, default=None,
+                        help="threshold_choice.json сдачи, посчитанный на той же проверочной "
+                             "выборке; без него — CALIBRATED_THRESHOLD")
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "release_choice.json")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--skip-benchmark", action="store_true")
@@ -190,10 +193,11 @@ def main() -> None:
     if candidate_threshold is None:
         candidate_threshold = threshold_from(args.candidate_threshold_report, CALIBRATED_THRESHOLD)
 
-    report = {"порог сдачи": CALIBRATED_THRESHOLD, "порог кандидата": candidate_threshold}
+    current_threshold = threshold_from(args.current_threshold_report, CALIBRATED_THRESHOLD)
+    report = {"порог сдачи": current_threshold, "порог кандидата": candidate_threshold}
     per_query = {}
     for name, checkpoints, projection, threshold in (
-        ("сдача", args.current, args.current_projection, CALIBRATED_THRESHOLD),
+        ("сдача", args.current, args.current_projection, current_threshold),
         ("кандидат", args.candidate, args.candidate_projection, candidate_threshold),
     ):
         extractor, query, gallery = vectors_for(checkpoints, projection, split, args.workers)
