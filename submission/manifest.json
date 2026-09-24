@@ -5,10 +5,10 @@
   "gallery": 750,
   "embedding_dim": 256,
   "embeddings_dtype": "float32",
-  "threshold": 0.605,
-  "accepted_queries": 1050,
-  "refused_queries": 60,
-  "refusal_rate": 0.0541,
+  "threshold": 0.69,
+  "accepted_queries": 1071,
+  "refused_queries": 39,
+  "refusal_rate": 0.0351,
   "vector_expansion": {
     "method": "DBA по галерее + alpha-QE запроса по галерее; связей запрос-запрос нет (ответ 38)",
     "dba_k": 3,
@@ -28,8 +28,8 @@
   "confidence_definition": "косинусное сходство исходных эмбеддингов (до обогащения), не калиброванная вероятность; обогащение и переранжирование меняют только порядок",
   "refusal_encoding": "отсутствие строк для query_id в candidates.csv",
   "checksums": {
-    "submission.csv": "95afe0561f5c8363db548c47d6143268a78ba270d57bfb7d62d35987d764bbae",
-    "candidates.csv": "f4e01f79113fd2c63b139cbe49e3abf60436c27b5b6a1cf34c23815aa1bb834f",
-    "embeddings.npy": "b11a81cb33cfdf814831040c73c15ab1cde4d91322d91d932d51f936c0a2d282"
+    "submission.csv": "d9ddaa60c8bd147644824ca85acd0b9a9676746c87dec0d5ce724e5f9723a0de",
+    "candidates.csv": "35aa0e5a86575117969fc22ac22b0e3ac2bf9d9ebdd77b3622a15d5d906c2bdd",
+    "embeddings.npy": "ddfeec7b850db3f71677348ba7614ce09344c81683fb0d3c20adc6f38de9c89b"
   }
 }
