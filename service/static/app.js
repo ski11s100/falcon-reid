@@ -647,15 +647,7 @@ function renderSearch(data) {
     + " · нажмите на снимок, чтобы сравнить";
   renderConfidence(data);
   renderCandidates();
-  // При отказе подсказываем, что делать дальше. Разбор ошибок на публичном
-  // тесте (docs/ERROR_ANALYSIS.md): почти все ложные отказы — машина видна не
-  // целиком, её закрывает другая машина или люди. Совет следует из этого.
-  const hints = [...data.quality.warnings];
-  if (data.verdict === "совпадений нет" && data.candidates.length) {
-    hints.push("Если машина на кадре перекрыта другой машиной или людьми, обведите только "
-      + "видимую часть кузова или возьмите кадр с другой камеры");
-  }
-  $("warnings").innerHTML = hints.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
+  $("warnings").innerHTML = data.quality.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("");
   document.querySelector(".result-tools").hidden = !data.candidates.length;
   $("confidence").hidden = !data.candidates.length;
   showResultBody();
