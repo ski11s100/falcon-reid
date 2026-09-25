@@ -1,15 +1,15 @@
 /* ФАЛЬКОН — пульт оператора. Язык «Отпечаток».
  *
  * Идея: номер машины размыт, и опираться на него нельзя. Зато у машины есть
- * отпечаток — 256 чисел, которые модель считает по кузову. Интерфейс
- * показывает его как штрихкод в рамке номерного знака: «номер, который нельзя
- * размыть». У одной машины на разных камерах штрихкоды почти одинаковые,
- * несовпавшие знаки отпечатка отмечены красным.
+ * отпечаток — 256 чисел, которые модель считает по кузову. Интерфейс рисует
+ * его папиллярным узором, как отпечаток пальца: у одной машины на разных
+ * камерах узоры совпадают, у разных — расходятся. Кандидат накладывается на
+ * запрос: серый узор запроса, поверх синий (совпал) или красный (не совпал).
  *
- * Отсюда и весь язык: бумага, чернила и синий номерного знака. Рамки —
- * толстые чернильные, как у номера; цифры набраны узким Oswald, родственником
- * шрифта номерных знаков; коды — моноширинным. Синий значит «совпадение»,
- * красный — «не совпало», янтарный — «нужна проверка».
+ * Отсюда и весь язык: бумага, чернила дактилоскопической карты и синий
+ * номерного знака. Рамки — толстые чернильные; цифры набраны узким Oswald,
+ * родственником шрифта номерных знаков; коды — моноширинным. Синий значит
+ * «совпадение», красный — «не совпало», янтарный — «нужна проверка».
  *
  * Шрифты лежат в проекте: интерфейс работает без интернета.
  */
@@ -215,13 +215,11 @@ button, input { font: inherit; color: inherit; }
 .marquee__row b { color: #fff; font-weight: 600; }
 .marquee__row i {
   display: inline-block;
-  width: 26px;
-  height: 11px;
-  margin: 0 6px;
+  width: 13px;
+  height: 16px;
+  margin: 0 8px;
   font-size: 0;
-  background: repeating-linear-gradient(90deg,
-    #fff 0 2px, transparent 2px 3px, #fff 3px 4px, transparent 4px 7px,
-    #fff 7px 10px, transparent 10px 11px, #fff 11px 12px, transparent 12px 14px);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 32'%3E%3Cg fill='none' stroke='%23fff' stroke-width='1.6'%3E%3Cellipse cx='13' cy='17' rx='3' ry='4'/%3E%3Cellipse cx='13' cy='16.5' rx='6.5' ry='8.5'/%3E%3Cellipse cx='13' cy='16' rx='10' ry='13'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 @keyframes marquee {
@@ -320,7 +318,18 @@ button, input { font: inherit; color: inherit; }
 .query-tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 8px; }
 
 /* Отпечаток запроса: появляется после поиска под кадром. */
-.query-print { margin-top: 14px; }
+.query-print {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.query-print__text { display: grid; gap: 2px; font-size: 12px; color: var(--ink-2); }
+.query-print__text b { font-family: var(--display); font-size: 16px; font-weight: 600; color: var(--ink); text-transform: uppercase; }
 .query-print__label,
 .print-row__label {
   display: flex;
@@ -431,18 +440,25 @@ kbd {
 }
 .drop-overlay p { margin: 0; color: var(--blue); font-family: var(--display); font-size: 30px; font-weight: 600; text-transform: uppercase; }
 
-/* ---------- Номерной знак-отпечаток ---------- */
+/* ---------- Отпечаток: папиллярный узор ---------- */
 
-.plate { display: block; width: 100%; height: auto; overflow: visible; }
-.plate--mini { width: 190px; flex: none; }
-.plate--group { width: 250px; flex: none; }
+.print { display: block; width: 100%; height: auto; }
+.print--mini { width: 56px; flex: none; }
+.print--group { width: 80px; flex: none; }
+.print--query { width: 88px; flex: none; background: var(--plate); border-radius: 6px; }
 
 /* ---------- Первый экран результата ---------- */
 
 .result-empty { padding: 18px 8px 16px; }
 
-.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 28px; align-items: center; }
-.hero__plate { min-width: 0; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 30px; align-items: center; }
+.hero__plate { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.hero-print { margin: 0; display: grid; gap: 8px; justify-items: center; text-align: center; }
+.hero-print .print { max-width: 150px; }
+.hero-print figcaption { display: grid; gap: 2px; color: var(--ink-3); font-family: var(--mono); font-size: 10px; line-height: 1.35; }
+.hero-print figcaption b { font-family: var(--display); font-size: 15px; font-weight: 600; text-transform: uppercase; }
+.hero-print--blue figcaption b { color: var(--blue); }
+.hero-print--red figcaption b { color: var(--red); }
 .hero__title {
   margin: 0;
   font-family: var(--display);
@@ -455,7 +471,9 @@ kbd {
 .hero__title span { color: var(--blue); }
 .hero__text { margin: 12px 0 0; color: var(--ink-2); font-size: 14px; line-height: 1.55; }
 .hero__legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; }
-.hero__legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; background: var(--ink); }
+.hero__legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: 3px; background: var(--ink); }
+.hero__legend span.ref::before { background: #B9B5AB; }
+.hero__legend span.hit::before { background: var(--blue); }
 .hero__legend span.miss::before { background: var(--red); }
 
 .result-empty__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 22px; }
@@ -653,7 +671,7 @@ kbd {
 .candidates--shots { grid-template-columns: 1fr; }
 .candidate {
   display: grid;
-  grid-template-columns: 26px 96px minmax(0, 1fr) 190px 60px;
+  grid-template-columns: 26px 96px minmax(0, 1fr) 56px 60px;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -815,10 +833,21 @@ kbd {
 .compare figcaption { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
 
 /* Два отпечатка друг под другом: несовпавшие знаки кандидата — красные. */
-.compare-prints { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; padding-top: 14px; border-top: 2px solid var(--ink); }
-@media (max-width: 480px) { .compare-prints { grid-template-columns: 1fr; } }
+.compare-prints {
+  display: grid;
+  grid-template-columns: repeat(3, 120px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 2px solid var(--ink);
+}
+.compare-prints figure { margin: 0; display: grid; gap: 4px; justify-items: center; }
+.compare-prints figcaption { color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; }
+@media (max-width: 700px) { .compare-prints { grid-template-columns: repeat(3, 1fr); } .compare-prints__verdict { grid-column: 1 / -1; } }
 .print-row__label b { color: var(--ink); font-weight: 600; }
-.compare-prints__verdict { margin: 2px 0 0; font-family: var(--display); font-size: 18px; font-weight: 600; text-transform: uppercase; }
+.compare-prints__verdict { margin: 0; font-family: var(--display); font-size: 28px; font-weight: 600; line-height: 1.05; text-transform: uppercase; }
+.compare-prints__verdict span { display: block; margin-top: 6px; color: var(--ink-2); font-family: var(--sans); font-size: 13px; font-weight: 400; line-height: 1.45; text-transform: none; }
 .compare-prints__verdict--match { color: var(--blue); }
 .compare-prints__verdict--miss { color: var(--red); }
 
@@ -844,7 +873,7 @@ kbd {
 @media (max-width: 1180px) {
   .topbar__product { display: none; }
   .workspace { grid-template-columns: 360px minmax(0, 1fr); }
-  .plate--group { width: 190px; }
+
 }
 
 @media (max-width: 860px) {
@@ -858,9 +887,8 @@ kbd {
   .result-tools { margin-left: 0; }
   .dialog__keys { display: none; }
   .group__head { flex-wrap: wrap; }
-  .plate--group { order: 5; width: 100%; }
   .candidate { grid-template-columns: 22px 80px minmax(0, 1fr) 54px; }
-  .candidate .plate--mini { display: none; }
+  .candidate .print--mini { display: none; }
 }
 
 @media (max-width: 480px) {
