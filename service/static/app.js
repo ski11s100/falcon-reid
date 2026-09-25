@@ -807,6 +807,9 @@ function openCompare(index) {
   if (!candidate) return;
   const threshold = search.data.threshold;
   const over = isOver(candidate, threshold);
+  // Двойники: над порогом несколько машин почти вровень. Узоры у них и
+  // должны совпадать — поэтому решает не отпечаток, а детали на снимках.
+  const review = over && search.data.verdict === "требуется проверка";
 
   const total = search.data.candidates.length;
   $("compare-title").textContent = `Кандидат ${index + 1}: ${candidate.vehicle_id || "без ID"}`;
@@ -814,7 +817,8 @@ function openCompare(index) {
   $("compare-prev").disabled = index === 0;
   $("compare-next").disabled = index === total - 1;
   $("compare-meta").textContent = `Сходство ${candidate.score.toFixed(3)}` + (threshold !== null
-    ? (over ? ` — выше порога ${formatThreshold(threshold)}, совпадение` : ` — ниже порога ${formatThreshold(threshold)}`)
+    ? (review ? ` — выше порога ${formatThreshold(threshold)}, но другая машина почти вровень: решает человек`
+      : over ? ` — выше порога ${formatThreshold(threshold)}, совпадение` : ` — ниже порога ${formatThreshold(threshold)}`)
     : "");
   $("compare-query").src = search.cropUrl;
   $("compare-candidate").src = candidate.thumbnail || "";
@@ -830,7 +834,9 @@ function openCompare(index) {
     <figure>${printSvg(candidate.fingerprint, { reference: search.data.fingerprint, colour: tone, label: "Наложение отпечатков" })}
       <figcaption>Наложение</figcaption></figure>
     <p class="compare-prints__verdict compare-prints__verdict--${over ? "match" : "miss"}">${
-      over ? "Линии совпали" : "Линии разошлись"}<span>${over
+      over ? "Линии совпали" : "Линии разошлись"}<span>${review
+        ? "Узоры ложатся друг на друга — но и у второй машины тоже. Отпечаток их не различает: сравните мелочи на снимках — наклейки, надписи, диски."
+        : over
         ? "Серый — отпечаток запроса, синий — кандидата: узоры ложатся друг на друга."
         : "Серый — отпечаток запроса, красный — кандидата: узоры не совпадают."}</span></p>` : "";
   $("compare-explain").textContent = "Включите «куда смотрела модель», чтобы увидеть области кадра, "
