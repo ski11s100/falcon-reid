@@ -64,7 +64,19 @@ class VectorRepository(Protocol):
     def delete_older_than(self, cutoff: float) -> int: ...
     def count(self) -> int: ...
     def list_vehicles(self, limit: int = 100) -> list[dict]: ...
+    def add_feedback(self, candidate_image_id: str, same: bool, score: float,
+                     verdict: str, threshold: float | None) -> dict | None: ...
+    def list_feedback(self, limit: int = 1000) -> list[dict]: ...
     def close(self) -> None: ...
+
+
+# Решения оператора по паре «запрос — кандидат». Кадров и векторов здесь нет,
+# как и в журнале обращений: только какой снимок галереи показан, что решил
+# человек, какое сходство он видел и что ответил сервис. Этого хватает, чтобы
+# перепроверить порог и зазор двойников на настоящих решениях, а новые ракурсы
+# подтверждённой машины оператор добавляет в галерею отдельным действием.
+FEEDBACK_COLUMNS = ("created_at", "candidate_image_id", "candidate_vehicle_id",
+                    "same", "score", "verdict", "threshold")
 
 
 def _normalise(vector: np.ndarray) -> np.ndarray:
@@ -137,6 +149,18 @@ class PgVectorRepository:
                 f"ALTER TABLE {self.table} ADD COLUMN IF NOT EXISTS thumbnail BYTEA")
             self.connection.execute(
                 f"CREATE INDEX IF NOT EXISTS {self.table}_vehicle_id ON {self.table} (vehicle_id)")
+            self.connection.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.table}_feedback (
+                    id                   BIGSERIAL PRIMARY KEY,
+                    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    candidate_image_id   TEXT NOT NULL,
+                    candidate_vehicle_id TEXT,
+                    same                 BOOLEAN NOT NULL,
+                    score                REAL NOT NULL,
+                    verdict              TEXT NOT NULL,
+                    threshold            REAL
+                )
+            """)
 
         self.ann_index = self._try_create_ann_index(dimension)
 
@@ -236,8 +260,35 @@ class PgVectorRepository:
     def delete_older_than(self, cutoff: float) -> int:
         """Удаляет снимки, добавленные раньше cutoff (секунды Unix). Срок хранения."""
         with self._lock, self.connection.cursor() as cursor:
+            cursor.execute(f"DELETE FROM {self.table}_feedback WHERE created_at < to_timestamp(%s)",
+                           (cutoff,))
             cursor.execute(f"DELETE FROM {self.table} WHERE created_at < to_timestamp(%s)", (cutoff,))
             return int(cursor.rowcount)
+
+    def add_feedback(self, candidate_image_id: str, same: bool, score: float,
+                     verdict: str, threshold: float | None) -> dict | None:
+        """Сохраняет решение оператора. None — такого снимка в галерее нет."""
+        with self._lock, self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""INSERT INTO {self.table}_feedback
+                       (candidate_image_id, candidate_vehicle_id, same, score, verdict, threshold)
+                   SELECT image_id, vehicle_id, %s, %s, %s, %s FROM {self.table} WHERE image_id = %s
+                   RETURNING {", ".join(FEEDBACK_COLUMNS)}""",
+                (same, score, verdict, threshold, candidate_image_id))
+            row = cursor.fetchone()
+        return self._feedback_row(row) if row else None
+
+    def list_feedback(self, limit: int = 1000) -> list[dict]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(f"SELECT {', '.join(FEEDBACK_COLUMNS)} FROM {self.table}_feedback "
+                           f"ORDER BY id DESC LIMIT %s", (limit,))
+            return [self._feedback_row(r) for r in cursor.fetchall()]
+
+    @staticmethod
+    def _feedback_row(row) -> dict:
+        entry = dict(zip(FEEDBACK_COLUMNS, row))
+        entry["created_at"] = entry["created_at"].isoformat()
+        return entry
 
     def count(self) -> int:
         with self.connection.cursor() as cursor:
@@ -300,6 +351,18 @@ class SQLiteRepository:
                        self.connection.execute("PRAGMA table_info(gallery)").fetchall()}
             if "thumbnail" not in columns:
                 self.connection.execute("ALTER TABLE gallery ADD COLUMN thumbnail BLOB")
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS gallery_feedback (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at           REAL NOT NULL,
+                    candidate_image_id   TEXT NOT NULL,
+                    candidate_vehicle_id TEXT,
+                    same                 INTEGER NOT NULL,
+                    score                REAL NOT NULL,
+                    verdict              TEXT NOT NULL,
+                    threshold            REAL
+                )
+            """)
             self.connection.commit()
 
     def upsert(self, items: list[GalleryItem]) -> int:
@@ -358,9 +421,40 @@ class SQLiteRepository:
 
     def delete_older_than(self, cutoff: float) -> int:
         with self._lock:
+            self.connection.execute("DELETE FROM gallery_feedback WHERE created_at < ?", (cutoff,))
             cursor = self.connection.execute("DELETE FROM gallery WHERE created_at < ?", (cutoff,))
             self.connection.commit()
             return int(cursor.rowcount)
+
+    def add_feedback(self, candidate_image_id: str, same: bool, score: float,
+                     verdict: str, threshold: float | None) -> dict | None:
+        import time
+        with self._lock:
+            found = self.connection.execute(
+                "SELECT vehicle_id FROM gallery WHERE image_id = ?", (candidate_image_id,)).fetchone()
+            if found is None:
+                return None
+            row = (time.time(), candidate_image_id, found[0], int(same), float(score), verdict, threshold)
+            self.connection.execute(
+                f"INSERT INTO gallery_feedback ({', '.join(FEEDBACK_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                row)
+            self.connection.commit()
+        return self._feedback_row(row)
+
+    def list_feedback(self, limit: int = 1000) -> list[dict]:
+        with self._lock:
+            rows = self.connection.execute(
+                f"SELECT {', '.join(FEEDBACK_COLUMNS)} FROM gallery_feedback ORDER BY id DESC LIMIT ?",
+                (limit,)).fetchall()
+        return [self._feedback_row(r) for r in rows]
+
+    @staticmethod
+    def _feedback_row(row) -> dict:
+        from datetime import UTC, datetime
+        entry = dict(zip(FEEDBACK_COLUMNS, row))
+        entry["created_at"] = datetime.fromtimestamp(entry["created_at"], UTC).isoformat()
+        entry["same"] = bool(entry["same"])
+        return entry
 
     def count(self) -> int:
         with self._lock:

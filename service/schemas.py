@@ -210,3 +210,36 @@ class HealthResponse(BaseModel):
     audit_log_ok: bool = Field(default=True, description="Последняя запись в журнал удалась")
     retention_days: float | None = Field(default=None,
                                          description="Срок хранения галереи, дней; пусто — без срока")
+
+
+Verdict = Literal["совпадение", "требуется проверка", "совпадений нет"]
+
+
+class FeedbackRequest(BaseModel):
+    """Решение оператора по одной паре «запрос — кандидат» из окна сравнения."""
+
+    candidate_image_id: str = Field(min_length=1, max_length=256,
+                                    description="Снимок галереи, который оператор сравнивал")
+    same: bool = Field(description="true — та же машина, false — другая")
+    score: float = Field(ge=-1.0, le=1.0, description="Сходство, которое видел оператор")
+    verdict: Verdict = Field(description="Что ответил сервис на этот запрос")
+    threshold: float | None = Field(default=None, description="Порог, при котором был ответ")
+
+
+class FeedbackSummary(BaseModel):
+    """Сводка решений: насколько ответы сервиса сходятся с решениями людей."""
+
+    total: int
+    confirmed: int = Field(description="Оператор подтвердил: та же машина")
+    rejected: int = Field(description="Оператор отклонил: другая машина")
+    above_threshold_confirmed: int
+    above_threshold_rejected: int
+    precision_above_threshold: float | None = Field(
+        default=None, description="Доля подтверждённых среди пар выше порога; пусто — решений нет")
+    by_verdict: dict[str, dict[str, int]] = Field(
+        default_factory=dict, description="Подтверждено и отклонено по ответам сервиса")
+
+
+class FeedbackResponse(BaseModel):
+    candidate_vehicle_id: str | None
+    summary: FeedbackSummary

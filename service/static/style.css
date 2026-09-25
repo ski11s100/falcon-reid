@@ -833,6 +833,27 @@ kbd {
 .compare figcaption { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
 
 /* Два отпечатка друг под другом: несовпавшие знаки кандидата — красные. */
+.compare-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+.compare-feedback__label {
+  margin: 0 6px 0 0;
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+#fb-same[aria-pressed="true"] { background: var(--blue); color: #fff; box-shadow: inset 0 0 0 2px var(--blue); }
+#fb-other[aria-pressed="true"] { background: var(--red); color: #fff; box-shadow: inset 0 0 0 2px var(--red); }
+.compare-feedback .text-button { font-size: 13px; }
+.compare-feedback__status { flex-basis: 100%; margin: 0; color: var(--ink-3); font-size: 13px; line-height: 1.5; }
+
 .compare-prints {
   display: grid;
   grid-template-columns: repeat(3, 120px) minmax(0, 1fr);

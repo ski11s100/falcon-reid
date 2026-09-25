@@ -24,7 +24,7 @@ import numpy as np
 import torch
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
@@ -51,6 +51,9 @@ from .schemas import (
     Candidate,
     ExplainRequest,
     ExplainResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    FeedbackSummary,
     HealthResponse,
     PlateAttention,
     PlateCheck,
@@ -693,6 +696,73 @@ def delete(image_id: str, raw: Request, audit: AuditLog = Depends(require_audit)
         raise HTTPException(status_code=404, detail="Наблюдение не найдено")
     audit.record("delete", raw, image_id=image_id)
     return {"deleted": image_id, "gallery_size": repository.count()}
+
+
+def summarise_feedback(rows: list[dict]) -> FeedbackSummary:
+    """Сводка решений операторов: сходятся ли ответы сервиса с людьми."""
+    above = [r for r in rows if r["threshold"] is not None and r["score"] >= r["threshold"]]
+    above_confirmed = sum(r["same"] for r in above)
+    by_verdict: dict[str, dict[str, int]] = {}
+    for row in rows:
+        counts = by_verdict.setdefault(row["verdict"], {"подтверждено": 0, "отклонено": 0})
+        counts["подтверждено" if row["same"] else "отклонено"] += 1
+    return FeedbackSummary(
+        total=len(rows), confirmed=sum(r["same"] for r in rows),
+        rejected=sum(not r["same"] for r in rows),
+        above_threshold_confirmed=above_confirmed,
+        above_threshold_rejected=len(above) - above_confirmed,
+        precision_above_threshold=round(above_confirmed / len(above), 4) if above else None,
+        by_verdict=by_verdict)
+
+
+# Сколько последних решений учитывает сводка и выгрузка. Решений на порядки
+# меньше, чем снимков, и десяти тысяч хватает с запасом.
+FEEDBACK_LIMIT = 10_000
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse, status_code=201, tags=["Поиск"],
+          summary="Решение оператора: та же машина или другая", dependencies=protected)
+def feedback(request: FeedbackRequest, raw: Request, audit: AuditLog = Depends(require_audit),
+             repository: VectorRepository = Depends(require_repository)) -> FeedbackResponse:
+    """Сохраняет решение человека по паре из окна сравнения.
+
+    Двойников модель не различает, человек — различает. Его решения копятся и
+    дают две вещи: сводку, насколько ответы сервиса сходятся с людьми, и
+    размеченные пары для перепроверки порога и зазора двойников на настоящих
+    данных (выгрузка — GET /api/feedback/export.csv).
+    """
+    entry = repository.add_feedback(request.candidate_image_id, request.same, request.score,
+                                    request.verdict, request.threshold)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Снимка с таким image_id нет в галерее")
+    audit.record("feedback", raw, candidate_image_id=request.candidate_image_id,
+                 candidate_vehicle_id=entry["candidate_vehicle_id"], same=request.same,
+                 score=round(request.score, 4), verdict=request.verdict)
+    return FeedbackResponse(candidate_vehicle_id=entry["candidate_vehicle_id"],
+                            summary=summarise_feedback(repository.list_feedback(FEEDBACK_LIMIT)))
+
+
+@app.get("/api/feedback", response_model=FeedbackSummary, tags=["Поиск"],
+         summary="Сводка решений операторов", dependencies=protected)
+def feedback_summary(repository: VectorRepository = Depends(require_repository)) -> FeedbackSummary:
+    return summarise_feedback(repository.list_feedback(FEEDBACK_LIMIT))
+
+
+@app.get("/api/feedback/export.csv", tags=["Поиск"], summary="Выгрузка решений операторов в CSV",
+         dependencies=protected)
+def feedback_export(repository: VectorRepository = Depends(require_repository)) -> Response:
+    """Размеченные пары для перекалибровки: сходство и решение человека."""
+    import csv
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["created_at", "candidate_image_id", "candidate_vehicle_id", "same",
+                     "score", "verdict", "threshold"])
+    for row in repository.list_feedback(FEEDBACK_LIMIT):
+        writer.writerow([row["created_at"], row["candidate_image_id"], row["candidate_vehicle_id"] or "",
+                         int(row["same"]), round(row["score"], 6), row["verdict"],
+                         "" if row["threshold"] is None else row["threshold"]])
+    return Response(content=buffer.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="falcon-feedback.csv"'})
 
 
 @app.exception_handler(ValueError)

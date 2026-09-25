@@ -734,7 +734,7 @@ function renderSearch(data) {
   // Подсказываем, на что смотреть в сравнении и чем ещё можно отсечь лишнюю.
   if (data.verdict === "требуется проверка" && data.threshold !== null) {
     hints.push("Откройте сравнение с каждой из машин: различия у двойников в мелочах — "
-      + "наклейки, диски, вмятины, багажник на крыше. И сверьте время и камеру: одна "
+      + "рисунок на крыше, наклейки, диски, вмятины. И сверьте время и камеру: одна "
       + "машина не бывает в двух местах одновременно");
   }
   if (data.verdict === "совпадений нет" && data.candidates.length) {
@@ -835,13 +835,14 @@ function openCompare(index) {
       <figcaption>Наложение</figcaption></figure>
     <p class="compare-prints__verdict compare-prints__verdict--${over ? "match" : "miss"}">${
       over ? "Линии совпали" : "Линии разошлись"}<span>${review
-        ? "Узоры ложатся друг на друга — но и у второй машины тоже. Отпечаток их не различает: сравните мелочи на снимках — наклейки, надписи, диски."
+        ? "Узоры ложатся друг на друга — но и у второй машины тоже. Отпечаток их не различает: сравните мелочи на снимках — крышу, наклейки, диски."
         : over
         ? "Серый — отпечаток запроса, синий — кандидата: узоры ложатся друг на друга."
         : "Серый — отпечаток запроса, красный — кандидата: узоры не совпадают."}</span></p>` : "";
   $("compare-explain").textContent = "Включите «куда смотрела модель», чтобы увидеть области кадра, "
     + "на которые модель опиралась, сравнивая его с этим кандидатом (Grad-CAM).";
   $("compare").dataset.index = index;
+  renderFeedback(search, candidate);
   if (!$("compare").open) {
     $("compare-heat").checked = false;
     $("compare").showModal();
@@ -850,6 +851,70 @@ function openCompare(index) {
     $("compare-heat").dispatchEvent(new Event("change"));
   }
 }
+
+/* ---------- Решение оператора ---------- */
+
+// Решения запоминаются в самом результате поиска: при листании кандидатов и
+// возврате к запросу из истории видно, что уже решено.
+function renderFeedback(search, candidate) {
+  const decided = search.feedback?.[candidate.image_id];
+  $("fb-same").setAttribute("aria-pressed", String(decided === true));
+  $("fb-other").setAttribute("aria-pressed", String(decided === false));
+  const canAdd = decided === true && candidate.vehicle_id && !search.added?.[candidate.vehicle_id];
+  $("fb-add").hidden = !canAdd;
+  if (canAdd) $("fb-add").textContent = `Добавить кадр запроса в галерею ${candidate.vehicle_id}`;
+  $("fb-status").textContent = decided === undefined
+    ? "Решение сохранится: по таким парам перепроверяются порог и правило двойников."
+    : decided
+      ? "Сохранено: та же машина."
+      : "Сохранено: другая машина — трудная пара для перекалибровки.";
+}
+
+async function sendFeedback(same) {
+  const search = state.lastSearch;
+  const candidate = search?.data.candidates[Number($("compare").dataset.index)];
+  if (!candidate) return;
+  try {
+    const data = await call("POST", "/api/feedback", {
+      candidate_image_id: candidate.image_id, same, score: candidate.score,
+      verdict: search.data.verdict, threshold: search.data.threshold,
+    });
+    search.feedback = { ...(search.feedback || {}), [candidate.image_id]: same };
+    renderFeedback(search, candidate);
+    const summary = data.summary;
+    const above = summary.above_threshold_confirmed + summary.above_threshold_rejected;
+    $("fb-status").textContent += ` Всего решений: ${summary.total}`
+      + (above ? ` · пары выше порога: подтверждено ${summary.above_threshold_confirmed}, `
+        + `отклонено ${summary.above_threshold_rejected}.` : ".");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+$("fb-same").addEventListener("click", () => sendFeedback(true));
+$("fb-other").addEventListener("click", () => sendFeedback(false));
+// Подтверждённый кадр — новый ракурс машины: добавленный в галерею, он поможет
+// найти её в следующий раз. Отдельным действием: решает оператор, не сервис.
+$("fb-add").addEventListener("click", async () => {
+  const search = state.lastSearch;
+  const candidate = search?.data.candidates[Number($("compare").dataset.index)];
+  if (!candidate?.vehicle_id) return;
+  $("fb-add").disabled = true;
+  try {
+    const data = await call("POST", "/api/gallery/register", {
+      image_id: `ui-${Date.now()}`, vehicle_id: candidate.vehicle_id, image_base64: search.cropUrl,
+    });
+    search.added = { ...(search.added || {}), [candidate.vehicle_id]: true };
+    toast(`Кадр добавлен в галерею ${candidate.vehicle_id} · всего снимков ${data.gallery_size}`);
+    renderFeedback(search, candidate);
+    refreshStatus();
+    loadGallery();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    $("fb-add").disabled = false;
+  }
+});
 
 function stepCompare(delta) {
   const total = state.lastSearch?.data.candidates.length || 0;

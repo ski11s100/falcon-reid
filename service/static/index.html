@@ -243,6 +243,14 @@
     </figure>
   </div>
   <div class="compare-prints" id="compare-prints"></div>
+  <!-- Решение человека: двойников модель не различает, человек — различает. -->
+  <div class="compare-feedback" id="compare-feedback">
+    <p class="compare-feedback__label">Ваше решение</p>
+    <button type="button" class="button button--small button--ghost" id="fb-same" aria-pressed="false">Это она</button>
+    <button type="button" class="button button--small button--ghost" id="fb-other" aria-pressed="false">Не она</button>
+    <button type="button" class="text-button" id="fb-add" hidden>Добавить кадр запроса в галерею</button>
+    <p class="compare-feedback__status" id="fb-status" aria-live="polite"></p>
+  </div>
   <p class="dialog__note" id="compare-explain"></p>
   <p class="dialog__keys">← → — соседний кандидат · H — карта внимания · Esc — закрыть</p>
 </dialog>
