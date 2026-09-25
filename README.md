@@ -17,9 +17,11 @@
 | Задержка batch=1 / пропускная способность | **28.0 мс** / **140 кадр/с** | [docs/benchmark_container.json](docs/benchmark_container.json), замер внутри образа |
 | Размер весов | 403 МБ при лимите 2 ГБ | три модели в fp16, [models/README.md](models/README.md) |
 | Опора на номер | нет: закраска номера стоит столько же, сколько контрольная зона | [scripts/plate_masking_check.py](scripts/plate_masking_check.py) |
+| Двойники одной модели и окраски | ответ «требуется проверка»: ловит 10 из 17 ложных совпадений | раздел 6, [docs/twin_check.json](docs/twin_check.json) |
 | Запуск | `docker compose up --build` → http://localhost:8000 | раздел 3 |
 | Файлы сдачи | [submission/](submission) — одна команда `run_submission.py` | раздел 4 |
 | Безопасность и закон | журнал обращений, срок хранения, данные не покидают контур заказчика | [docs/SECURITY.md](docs/SECURITY.md), [docs/LEGAL.md](docs/LEGAL.md) |
+| Презентация и запись показа | 22 слайда; запись 1 мин 43 с | [docs/presentation.pdf](docs/presentation.pdf), [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
 
 ---
 
