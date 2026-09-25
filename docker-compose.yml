@@ -57,6 +57,9 @@ services:
       # баллу 0.7*F1 + 0.3*TNR эталонного скрипта организаторов
       # (CALIBRATED_THRESHOLD в falcon/submit.py, проверка — verify_official.py).
       FALCON_MATCH_THRESHOLD: "0.69"
+      # Правило двойников: две разные машины над порогом почти вровень —
+      # «требуется проверка» (TWIN_MARGIN в falcon/calibrate.py).
+      FALCON_TWIN_MARGIN: "0.05"
       FALCON_PROJECTION: /opt/falcon/models/projection.pt
       FALCON_FLIP_TTA: "false"
       # Пусто — доступ без ключа (для проверки одной командой).

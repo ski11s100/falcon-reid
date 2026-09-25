@@ -59,6 +59,7 @@ COPY models ./models
 # порог откалиброван под этот состав моделей и на одну модель не переносится.
 ENV FALCON_CHECKPOINTS=/opt/falcon/models/clip-ours.pt,/opt/falcon/models/clip-veri-ours.pt,/opt/falcon/models/resnet-v2-veri.pt \
     FALCON_MATCH_THRESHOLD=0.69 \
+    FALCON_TWIN_MARGIN=0.05 \
     FALCON_PROJECTION=/opt/falcon/models/projection.pt \
     FALCON_FLIP_TTA=false \
     FALCON_DEVICE=cuda \

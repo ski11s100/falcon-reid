@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
 
+from falcon.calibrate import find_twin
 from falcon.explain import (GradCAM, overlay_heatmap, plate_attention, plate_check_verdict,
                             plate_masking_boxes)
 from falcon.extract import ExtractorConfig, FeatureExtractor, build_extractor
@@ -453,16 +454,20 @@ def search(request: SearchRequest, raw: Request, settings: Settings = Depends(ge
 
     threshold = request.threshold if request.threshold is not None else settings.match_threshold
     elapsed = round((time.perf_counter() - started) * 1000, 2)
+    response = decide(candidates, threshold, settings.twin_margin, quality, elapsed, query_fingerprint)
     # Кто и что искал: без кадра и без вектора, только итог поиска.
     top = candidates[0] if candidates else None
-    audit.record("search", raw,
-                 verdict=("совпадение" if top is not None and threshold is not None
-                          and top.score >= threshold else "нет совпадения"),
+    audit.record("search", raw, verdict=response.verdict,
                  top_image_id=top.image_id if top else None,
                  top_vehicle_id=top.vehicle_id if top else None,
                  top_score=round(top.score, 4) if top else None,
                  threshold=threshold, excluded=len(excluded) or None, elapsed_ms=elapsed)
+    return response
 
+
+def decide(candidates: list[Candidate], threshold: float | None, twin_margin: float | None,
+           quality: QualityReport, elapsed: float, query_fingerprint: list[float] | None) -> SearchResponse:
+    """Вердикт по выдаче: совпадение, отказ или проверка человеком."""
     if threshold is None:
         # Порог не откалиброван — подтверждать совпадение нельзя. Показываем
         # кандидатов оператору, но решение за человеком.
@@ -480,6 +485,23 @@ def search(request: SearchRequest, raw: Request, settings: Settings = Depends(ge
             fingerprint=query_fingerprint)
 
     accepted = candidates[0].score >= threshold
+    twin = (find_twin([(c.vehicle_id, c.score) for c in candidates], threshold, twin_margin)
+            if accepted and twin_margin else None)
+    if twin is not None:
+        # Двойник: над порогом две разные машины почти вровень. Без номера
+        # уверенно выбрать одну нельзя — показываем обе и отдаём решение человеку.
+        leader = candidates[0].vehicle_id
+        rival, rival_score = twin
+        leader_score = max(c.score for c in candidates if c.vehicle_id == leader)
+        return SearchResponse(
+            accepted=False, verdict="требуется проверка",
+            refusal_reason=(f"Две разные машины почти одинаково похожи на запрос: {leader} "
+                            f"({leader_score:.3f}) и {rival} ({rival_score:.3f}). Разница меньше "
+                            f"{twin_margin:g} — так бывает у двойников одной модели и окраски; "
+                            "сравните детали вручную"),
+            threshold=threshold, matches=[], candidates=candidates, quality=quality,
+            elapsed_ms=elapsed, fingerprint=query_fingerprint)
+
     return SearchResponse(
         accepted=accepted,
         verdict="совпадение" if accepted else "совпадений нет",
