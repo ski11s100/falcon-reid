@@ -10,7 +10,7 @@
  *   setQuery(true)   — кадр загружен: цель выделена, остальное приглушено;
  *   setScanning(on)  — идёт поиск: от цели по камерам бежит волна;
  *   showResults(...) — у камер всплывают настоящие снимки найденных кандидатов
- *                      со сходством: зелёные выше порога, серые ниже.
+ *                      со сходством: синие выше порога, чёрные ниже.
  * Камеры на схеме условные: сервис не знает, где установлены камеры (их нет в
  * данных по условию задачи), поэтому снимки раскладываются по ближайшим к цели.
  *
@@ -22,58 +22,49 @@
 (function () {
   "use strict";
 
-  // Ночной город: асфальт, светлые тротуары по краю кварталов, тёмные дворы.
+  // Язык «Отпечатка»: бумага, чернила и синий номерного знака. Синий — цвет
+  // цели и совпадения; днём он рисуется по бумаге, ночью уступает белому.
   const C = {
-    asphalt: "#0e1522",
-    sidewalk: "#1a2437",
-    yard: "#0a0f18",
-    park: "#0c1f18",
-    path: "rgba(160, 176, 150, 0.14)",
-    tree: "#123326",
-    treeLight: "#1f5540",
-    stall: "rgba(214, 224, 240, 0.13)",
-    marking: "rgba(214, 224, 240, 0.2)",
-    crosswalk: "rgba(214, 224, 240, 0.17)",
-    lamp: "255, 196, 120",
-    edge: "rgba(140, 186, 255, 0.14)",
-    target: "#7cc4ff",
-    cone: "124, 196, 255",
-    camera: "#f5b53d",
-    text: "#dfe6f3",
+    lamp: "255, 214, 150",
+    target: "#1C4FD8",
+    cone: "28, 79, 216",
+    camera: "#111111",
+    text: "#111111",
   };
 
-  // Фасады: левая грань в тени, правая освещена, крыша с градиентом.
-  const PALETTES = [
-    { left: "#0b111c", right: "#141e30", top: ["#1c2740", "#121a2a"] },
-    { left: "#0b1316", right: "#142229", top: ["#1b2c34", "#111c22"] },
-    { left: "#111119", right: "#1b1c29", top: ["#252640", "#17182a"] },
-    { left: "#0e131c", right: "#18202d", top: ["#212b3d", "#151c29"] },
-  ];
-  const ROOF = { left: "#161d2a", right: "#222c3d", top: ["#2b3547", "#202938"] };
-
-  // Неподвижный город рисуется в двух темах, и каждый кадр смешивает их по
-  // времени суток: днём светлые фасады с отражениями в стёклах и тени от
-  // домов, ночью горящие окна, фонари и свет фар.
+  // Днём город — белый бумажный макет, как у архитекторов: белые крыши,
+  // светлые грани, чёткий чернильный контур. Ночью тот же город становится
+  // чертежом-синькой: синее поле и белые линии, в окнах тёплый свет.
   const THEMES = {
     night: {
-      night: true, asphalt: C.asphalt, sidewalk: C.sidewalk, yard: C.yard, park: C.park, path: C.path,
-      tree: C.tree, treeLight: C.treeLight, stall: C.stall, marking: C.marking,
-      crosswalk: C.crosswalk, edge: C.edge, palettes: PALETTES, roof: ROOF,
-      haze: "rgba(7, 11, 19, 0.62)", vignette: "rgba(5, 8, 14, 0.6)",
+      night: true, asphalt: "#133B8F", sidewalk: "#1D4CA8", yard: "#16439C", park: "#1A4AA2",
+      path: "rgba(255, 255, 255, 0.16)", tree: "#2358B8", treeLight: "#3569C7",
+      stall: "rgba(255, 255, 255, 0.28)", marking: "rgba(255, 255, 255, 0.5)",
+      crosswalk: "rgba(255, 255, 255, 0.42)", edge: "rgba(255, 255, 255, 0.55)",
+      parapet: "rgba(8, 26, 74, 0.28)", treeShadow: "rgba(6, 20, 60, 0.35)",
+      palettes: [
+        { left: "#15418F", right: "#1F52AA", top: ["#2B61BE", "#2457B3"] },
+        { left: "#133D88", right: "#1C4DA2", top: ["#285DB8", "#2154AE"] },
+        { left: "#17458F", right: "#2256AE", top: ["#2F66C2", "#275CB7"] },
+        { left: "#123A84", right: "#1B4A9E", top: ["#265AB4", "#1F51A9"] },
+      ],
+      roof: { left: "#1A4899", right: "#2659B2", top: ["#3369C4", "#2C61BD"] },
+      haze: "rgba(19, 59, 143, 0.35)", vignette: "rgba(6, 22, 66, 0.5)",
     },
     day: {
-      night: false, asphalt: "#384150", sidewalk: "#5f697c", yard: "#46535c", park: "#3a6547",
-      path: "rgba(225, 214, 180, 0.32)", tree: "#2e6440", treeLight: "#5a9c67",
-      stall: "rgba(255, 255, 255, 0.3)", marking: "rgba(255, 255, 255, 0.45)",
-      crosswalk: "rgba(255, 255, 255, 0.5)", edge: "rgba(255, 255, 255, 0.16)",
+      night: false, asphalt: "#D6D3CA", sidewalk: "#E7E4DD", yard: "#EEECE6", park: "#DDE3D3",
+      path: "rgba(120, 112, 92, 0.22)", tree: "#C3CFB6", treeLight: "#D9E1CD",
+      stall: "rgba(17, 17, 17, 0.2)", marking: "rgba(255, 255, 255, 0.95)",
+      crosswalk: "rgba(255, 255, 255, 0.92)", edge: "rgba(17, 17, 17, 0.42)",
+      parapet: "rgba(17, 17, 17, 0.05)", treeShadow: "rgba(60, 55, 40, 0.12)",
       palettes: [
-        { left: "#515c6f", right: "#7f8ba0", top: ["#aab4c5", "#8f9bb0"] },
-        { left: "#4c5f64", right: "#778f94", top: ["#a1b6b9", "#88a0a3"] },
-        { left: "#5b5966", right: "#85828f", top: ["#a9a6b3", "#908d9b"] },
-        { left: "#5f5a51", right: "#8e877b", top: ["#b3ab9e", "#9b9386"] },
+        { left: "#D2CEC5", right: "#EAE7E0", top: ["#FFFFFF", "#F6F4EF"] },
+        { left: "#CFCCC4", right: "#E6E4DE", top: ["#FDFDFB", "#F2F0EA"] },
+        { left: "#D5D1C8", right: "#ECE9E3", top: ["#FFFFFF", "#F4F1EB"] },
+        { left: "#CCC8BE", right: "#E4E1DA", top: ["#FBFAF7", "#F0EDE7"] },
       ],
-      roof: { left: "#646d7e", right: "#919bad", top: ["#b8c0ce", "#a0a9ba"] },
-      haze: "rgba(178, 198, 224, 0.34)", vignette: "rgba(18, 26, 38, 0.38)",
+      roof: { left: "#C9C5BC", right: "#E2DFD8", top: ["#F7F5F0", "#ECE9E3"] },
+      haze: "rgba(239, 238, 234, 0.3)", vignette: "rgba(70, 64, 50, 0.14)",
     },
   };
 
@@ -404,7 +395,7 @@
       }
       return {
         box, height, roof,
-        palette: Math.floor(rand() * PALETTES.length),
+        palette: Math.floor(rand() * THEMES.day.palettes.length),
         windows: { seed: Math.floor(rand() * 1e9), lit: 0.16 + rand() * 0.34 },
         antenna: height > 10 ? 1 + rand() * 6 : 0,
       };
@@ -601,6 +592,9 @@
       if (!this.width || !this.layers) return;
       const night = this.nightness();
       this.night = night;
+      // Акцент: синий по бумаге, белый по синьке.
+      this.hl = night > 0.5 ? "255, 255, 255" : "28, 79, 216";
+      this.ink = night > 0.5 ? "255, 255, 255" : "17, 17, 17";
       g.clearRect(0, 0, this.width, this.height);
       this.blend(g, "ground", night);
       this.drawCones(g);
@@ -611,7 +605,7 @@
       const warm = 4 * night * (1 - night);
       if (warm > 0.01) {
         g.globalCompositeOperation = "soft-light";
-        g.fillStyle = `rgba(255, 138, 64, ${0.38 * warm})`;
+        g.fillStyle = `rgba(255, 150, 90, ${0.16 * warm})`;
         g.fillRect(0, 0, this.width, this.height);
         g.globalCompositeOperation = "source-over";
       }
@@ -706,7 +700,7 @@
         g.lineTo(...this.project(u1, v1));
         g.stroke();
         for (const tree of park.trees) {
-          g.fillStyle = "rgba(0, 0, 0, 0.35)";
+          g.fillStyle = T.treeShadow;
           this.ellipseAt(g, tree.u + 2, tree.v + 2, tree.r);
           g.fill();
           g.fillStyle = T.tree;
@@ -780,7 +774,7 @@
           s.fill();
         }
       });
-      g.globalAlpha = 0.26;
+      g.globalAlpha = 0.1;
       g.drawImage(shadows, 0, 0, this.width, this.height);
       g.globalAlpha = 1;
     }
@@ -798,7 +792,7 @@
         const top = this.boxPoints(b.box, height);
         const [cx, cy] = centroid(top);
         const inner = top.map(([x, y]) => [cx + (x - cx) * 0.84, cy + (y - cy) * 0.84]);
-        g.fillStyle = "rgba(0, 0, 0, 0.22)";
+        g.fillStyle = T.parapet;
         this.polygon(g, inner);
         g.fill();
 
@@ -806,7 +800,7 @@
           this.paintBox(g, unit.box, height, height + unit.height * lift, T.roof, null, T);
         }
         if (b.antenna) {
-          g.strokeStyle = "rgba(160, 176, 200, 0.55)";
+          g.strokeStyle = T.edge;
           g.lineWidth = 1;
           g.beginPath();
           g.moveTo(cx, cy);
@@ -858,14 +852,14 @@
           const t0 = (r + 0.3) / rows, t1 = (r + 0.72) / rows;
           const roll = rand();
           if (!T.night) {
-            // Днём окна — тёмное стекло, часть отражает небо.
-            g.fillStyle = roll < 0.22 ? "rgba(214, 232, 250, 0.5)" : "rgba(26, 38, 58, 0.55)";
+            // Днём у макета окна лишь намечены, редкие — синим стеклом.
+            g.fillStyle = roll < 0.12 ? "rgba(28, 79, 216, 0.22)" : "rgba(17, 17, 17, 0.09)";
           } else if (roll < windows.lit) {
             const warm = rand() < 0.72;
             const alpha = (left ? 0.55 : 0.75) * (0.6 + rand() * 0.4);
             g.fillStyle = warm ? `rgba(255, 204, 128, ${alpha})` : `rgba(160, 210, 255, ${alpha * 0.85})`;
           } else {
-            g.fillStyle = "rgba(120, 150, 200, 0.07)";
+            g.fillStyle = "rgba(255, 255, 255, 0.06)";
           }
           this.polygon(g, [at(s0, t0), at(s1, t0), at(s1, t1), at(s0, t1)]);
           g.fill();
@@ -895,23 +889,24 @@
      * ободок теплеет днём и синеет ночью. Цифр нет: подписи на схеме мешают. */
     drawClock(g, night) {
       const hours = this.hours();
-      const accent = night > 0.5 ? "rgba(185, 215, 255, 0.85)" : "rgba(255, 205, 122, 0.9)";
+      const dark = night > 0.5;
+      const ink = dark ? "255, 255, 255" : "17, 17, 17";
       const r = 16;
       g.save();
       g.translate(this.width - r - 20, r + 16);
 
-      g.fillStyle = "rgba(9, 13, 21, 0.66)";
+      g.fillStyle = dark ? "rgba(19, 59, 143, 0.9)" : "rgba(255, 255, 255, 0.92)";
       g.beginPath();
       g.arc(0, 0, r, 0, Math.PI * 2);
       g.fill();
-      g.strokeStyle = accent;
+      g.strokeStyle = `rgba(${ink}, 0.9)`;
       g.lineWidth = 1.3;
       g.stroke();
 
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2;
         const long = i % 3 === 0;
-        g.strokeStyle = long ? "rgba(223, 230, 243, 0.8)" : "rgba(223, 230, 243, 0.3)";
+        g.strokeStyle = `rgba(${ink}, ${long ? 0.85 : 0.3})`;
         g.lineWidth = long ? 1.4 : 1;
         const inner = r - (long ? 5 : 3);
         g.beginPath();
@@ -929,9 +924,9 @@
         g.lineTo(Math.sin(angle) * length, -Math.cos(angle) * length);
         g.stroke();
       };
-      hand(((hours % 12) / 12) * Math.PI * 2, r * 0.52, 2.6, "#e7ecf5");
-      hand(((hours % 1) * 60 / 60) * Math.PI * 2, r * 0.8, 1.5, "#c3cbdb");
-      g.fillStyle = accent;
+      hand(((hours % 12) / 12) * Math.PI * 2, r * 0.52, 2.6, `rgb(${ink})`);
+      hand(((hours % 1) * 60 / 60) * Math.PI * 2, r * 0.8, 1.5, dark ? "#FFFFFF" : "#1C4FD8");
+      g.fillStyle = dark ? "#FFFFFF" : "#1C4FD8";
       g.beginPath();
       g.arc(0, 0, 2, 0, Math.PI * 2);
       g.fill();
@@ -965,8 +960,8 @@
         const wave = this.scan * Math.max(0, Math.sin(this.time * 6 - away / 60));
         const alpha = (0.08 + camera.flash * 0.16 + wave * 0.18) * (0.65 + 0.35 * this.night);
         const fill = g.createRadialGradient(x, y, 0, x, y, reach * this.zoom);
-        fill.addColorStop(0, `rgba(${C.cone}, ${alpha * 2.2})`);
-        fill.addColorStop(1, `rgba(${C.cone}, 0)`);
+        fill.addColorStop(0, `rgba(${this.hl}, ${alpha * 2.2})`);
+        fill.addColorStop(1, `rgba(${this.hl}, 0)`);
         g.fillStyle = fill;
         this.polygon(g, points);
         g.fill();
@@ -974,8 +969,8 @@
         const [ex, ey] = this.project(camera.u + Math.cos(look) * reach * 0.9,
                                       camera.v + Math.sin(look) * reach * 0.9);
         const line = g.createLinearGradient(x, y, ex, ey);
-        line.addColorStop(0, `rgba(${C.cone}, ${0.35 + camera.flash * 0.4})`);
-        line.addColorStop(1, `rgba(${C.cone}, 0)`);
+        line.addColorStop(0, `rgba(${this.hl}, ${0.35 + camera.flash * 0.4})`);
+        line.addColorStop(1, `rgba(${this.hl}, 0)`);
         g.strokeStyle = line;
         g.lineWidth = 1;
         g.beginPath();
@@ -990,7 +985,7 @@
       g.lineWidth = 2.2;
       g.lineCap = "round";
       for (let k = 1; k < this.trail.length; k++) {
-        g.strokeStyle = `rgba(124, 196, 255, ${(k / this.trail.length) * 0.55})`;
+        g.strokeStyle = `rgba(${this.hl}, ${(k / this.trail.length) * 0.55})`;
         g.beginPath();
         g.moveTo(...this.project(...this.trail[k - 1]));
         g.lineTo(...this.project(...this.trail[k]));
@@ -1032,8 +1027,9 @@
         g.beginPath();
         g.roundRect(-length / 2 + 1, -width / 2 + 1.6, length, width, 2.4);
         g.fill();
-        if (car.target) { g.shadowColor = C.target; g.shadowBlur = 14; }
-        g.fillStyle = car.target ? C.target : car.colour;
+        const targetColour = this.night > 0.5 ? "#FFFFFF" : C.target;
+        if (car.target) { g.shadowColor = targetColour; g.shadowBlur = 10; }
+        g.fillStyle = car.target ? targetColour : car.colour;
         g.beginPath();
         g.roundRect(-length / 2, -width / 2, length, width, 2.4);
         g.fill();
@@ -1069,11 +1065,11 @@
         const angle = Math.atan2(ly - y, lx - x);
         const active = camera.flash > 0.05;
 
-        g.fillStyle = "rgba(0, 0, 0, 0.4)";
+        g.fillStyle = "rgba(0, 0, 0, 0.18)";
         g.beginPath();
         g.ellipse(x + 1, y + 0.5, 3.4, 1.7, 0, 0, Math.PI * 2);
         g.fill();
-        g.strokeStyle = "#5a6982";
+        g.strokeStyle = `rgba(${this.ink}, 0.85)`;
         g.lineWidth = 1.6;
         g.beginPath();
         g.moveTo(x, y);
@@ -1083,14 +1079,17 @@
         g.save();
         g.translate(x, topY);
         g.rotate(angle);
-        g.fillStyle = "#b9c3d2";                             // козырёк
+        g.fillStyle = "#111111";                             // козырёк
         g.fillRect(-2.6, -3.4, 12, 1.5);
-        g.fillStyle = "#e3e8f0";                             // корпус
+        g.fillStyle = "#FFFFFF";                             // корпус
+        g.strokeStyle = "#111111";
+        g.lineWidth = 0.8;
         g.beginPath();
         g.roundRect(-2.2, -2.4, 10.4, 5, 1.6);
         g.fill();
-        if (active) { g.shadowColor = C.target; g.shadowBlur = 12 * camera.flash; }
-        g.fillStyle = active ? C.target : "#18202e";         // объектив
+        g.stroke();
+        if (active) { g.shadowColor = C.target; g.shadowBlur = 10 * camera.flash; }
+        g.fillStyle = active ? C.target : "#111111";         // объектив
         g.beginPath();
         g.arc(8.4, 0.1, 2, 0, Math.PI * 2);
         g.fill();
@@ -1114,7 +1113,7 @@
         const [x1, y1] = this.project(link.from.u, link.from.v);
         const [x2, y2] = this.project(link.to.u, link.to.v);
         const mx = (x1 + x2) / 2, my = Math.min(y1, y2) - 44;
-        g.strokeStyle = `rgba(124, 196, 255, ${0.8 * life})`;
+        g.strokeStyle = `rgba(${this.hl}, ${0.8 * life})`;
         g.lineWidth = 1.5;
         g.setLineDash([5, 5]);
         g.lineDashOffset = -this.time * 18;                   // линия «бежит» от камеры к камере
@@ -1132,7 +1131,7 @@
         const [x, y] = this.project(mark.car.u, mark.car.v);
         const size = mark.target ? 13 : 9;
         const fade = Math.min(1, (mark.until - this.time) * 3);
-        g.strokeStyle = mark.target ? `rgba(124, 196, 255, ${fade})` : `rgba(223, 230, 243, ${0.55 * fade})`;
+        g.strokeStyle = mark.target ? `rgba(${this.hl}, ${fade})` : `rgba(${this.ink}, ${0.45 * fade})`;
         g.lineWidth = mark.target ? 1.6 : 1;
         // Уголки рамки — как у разметки в системах видеонаблюдения.
         const c = size * 0.45;
@@ -1155,7 +1154,7 @@
         for (let k = 0; k < 3; k++) {
           const phase = ((this.time * 0.9 + k / 3) % 1);
           const r = phase * 150 * this.zoom;
-          g.strokeStyle = `rgba(124, 196, 255, ${this.scan * (1 - phase) * 0.55})`;
+          g.strokeStyle = `rgba(${this.hl}, ${this.scan * (1 - phase) * 0.55})`;
           g.lineWidth = 1.4;
           g.beginPath();
           g.ellipse(x, y, r, r * this.squash, 0, 0, Math.PI * 2);
@@ -1163,13 +1162,13 @@
         }
       }
       const pulse = 14 + 5 * Math.sin(this.time * 4);
-      g.strokeStyle = "rgba(124, 196, 255, 0.85)";
+      g.strokeStyle = `rgba(${this.hl}, 0.9)`;
       g.lineWidth = 1.5;
       g.beginPath();
       g.ellipse(x, y, pulse, pulse * 0.62, 0, 0, Math.PI * 2);
       g.stroke();
       // Перекрестие вместо подписи: понятно без слов.
-      g.strokeStyle = "rgba(124, 196, 255, 0.55)";
+      g.strokeStyle = `rgba(${this.hl}, 0.6)`;
       g.lineWidth = 1;
       g.beginPath();
       for (const [dx, dy] of [[-1, 0], [1, 0]]) {
@@ -1191,7 +1190,7 @@
 
       g.setLineDash([6, 6]);
       g.lineWidth = 1.6;
-      g.strokeStyle = "rgba(52, 201, 139, 0.8)";
+      g.strokeStyle = `rgba(${this.hl}, 0.9)`;
       const [tx, ty] = this.project(this.target.u, this.target.v);
       g.beginPath();
       g.moveTo(tx, ty);
@@ -1202,7 +1201,7 @@
       g.stroke();
       g.setLineDash([]);
 
-      g.font = "700 10px Manrope, 'Segoe UI', sans-serif";
+      g.font = "600 10px 'JetBrains Mono', Consolas, monospace";
       this.hitboxes = [];
       for (const r of shown) {
         const [x, y] = this.project(r.camera.u, r.camera.v);
@@ -1211,24 +1210,24 @@
         const top = r.placement === "below" ? y + 12 : y - CARD.h - 16;
         const lit = this.highlight === r.index;
         g.globalAlpha = grow;
-        g.fillStyle = "rgba(10, 14, 22, 0.94)";
-        g.strokeStyle = lit ? "#7cc4ff" : r.over ? "rgba(52, 201, 139, 0.9)" : "rgba(223, 230, 243, 0.35)";
-        g.lineWidth = lit ? 2.4 : r.over ? 1.6 : 1;
-        if (lit) { g.shadowColor = "#7cc4ff"; g.shadowBlur = 16; }
+        g.fillStyle = "#FFFFFF";
+        g.strokeStyle = lit || r.over ? "#1C4FD8" : "#111111";
+        g.lineWidth = lit ? 3 : r.over ? 2 : 1.2;
+        if (lit) { g.shadowColor = "rgba(28, 79, 216, 0.6)"; g.shadowBlur = 12; }
         g.beginPath();
-        g.roundRect(left, top, CARD.w, CARD.h, 7);
+        g.roundRect(left, top, CARD.w, CARD.h, 4);
         g.fill();
         g.stroke();
         g.shadowBlur = 0;
         if (r.image.complete && r.image.naturalWidth) {
           g.save();
           g.beginPath();
-          g.roundRect(left + 3, top + 3, CARD.w - 6, CARD.h - 20, 5);
+          g.roundRect(left + 3, top + 3, CARD.w - 6, CARD.h - 20, 2);
           g.clip();
           g.drawImage(r.image, left + 3, top + 3, CARD.w - 6, CARD.h - 20);
           g.restore();
         }
-        g.fillStyle = r.over ? "#34c98b" : "#a3aab8";
+        g.fillStyle = r.over ? "#1C4FD8" : "#55534E";
         g.fillText(r.label, left + 5, top + CARD.h - 6, CARD.w - 10);
         g.beginPath();
         g.moveTo(x, r.placement === "below" ? top : top + CARD.h);

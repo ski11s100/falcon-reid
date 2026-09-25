@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ФАЛЬКОН — поиск транспортного средства без номера</title>
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -16,7 +16,7 @@
     <a class="brand" href="/" aria-label="Фалькон — на главную">
       <img class="brand__logo" src="/static/brand/falcon-logo.svg" alt="Фалькон" width="103" height="11">
     </a>
-    <span class="topbar__product">Поиск транспортного средства по внешнему виду, без номера</span>
+    <span class="topbar__product">Номер можно размыть. <b>Отпечаток — нет.</b></span>
     <div class="topbar__status" aria-label="Состояние сервиса">
       <span class="signal" id="st-status"><span class="signal__dot"></span><span class="signal__text">подключение…</span></span>
       <span class="topbar__item" id="st-model">—</span>
@@ -122,6 +122,8 @@
         </details>
       </div>
 
+      <div class="query-print" id="query-print" hidden></div>
+
       <button class="button" id="btn-search" disabled>Найти</button>
       <p class="keys-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> — найти · <kbd>Ctrl</kbd>+<kbd>V</kbd> — вставить кадр · кадр можно бросить в любое место окна</p>
 
@@ -159,7 +161,16 @@
     <!-- Результат поиска. До первого запроса — короткая подсказка. -->
     <section class="panel panel--result" id="result-panel" aria-label="Результат">
       <div class="result-empty" id="result-empty">
-        <p class="result-empty__title">Найти машину на других камерах — без номера</p>
+        <div class="hero">
+          <div class="hero__plate" id="hero-plate" aria-hidden="true"></div>
+          <div>
+            <p class="hero__title">Номер можно размыть.<br><span>Отпечаток — нет.</span></p>
+            <p class="hero__text">Три модели превращают кузов машины в 256 чисел — её отпечаток.
+              Здесь он показан штрихкодом в рамке номерного знака: у одной машины на разных
+              камерах штрихкоды почти совпадают, у разных машин — расходятся.</p>
+            <p class="hero__legend"><span>совпал с запросом</span><span class="miss">не совпал</span></p>
+          </div>
+        </div>
         <ol class="steps" aria-label="Как пользоваться">
           <li class="steps__item" data-step="1">
             <span class="steps__num">1</span>
@@ -231,6 +242,7 @@
       <figcaption id="compare-candidate-caption">Кандидат</figcaption>
     </figure>
   </div>
+  <div class="compare-prints" id="compare-prints"></div>
   <p class="dialog__note" id="compare-explain"></p>
   <p class="dialog__keys">← → — соседний кандидат · H — карта внимания · Esc — закрыть</p>
 </dialog>

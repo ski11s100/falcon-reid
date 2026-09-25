@@ -210,6 +210,7 @@ function resetFrame() {
   $("btn-register").disabled = true;
   $("file").value = "";
   state.exclude = [];
+  $("query-print").hidden = true;
   markStep(1);
   onScene((city) => city.setQuery(false));
 }
@@ -480,38 +481,92 @@ $("batch").addEventListener("change", async (event) => {
 /* ---------- Результат ---------- */
 
 const VERDICTS = {
-  "совпадение": { css: "accept", title: "Совпадение найдено" },
-  "требуется проверка": { css: "review", title: "Требуется проверка" },
-  "совпадений нет": { css: "refuse", title: "Совпадений нет" },
+  "совпадение": { css: "accept", title: "Отпечаток совпал" },
+  "требуется проверка": { css: "review", title: "Нужна проверка" },
+  "совпадений нет": { css: "refuse", title: "Отпечаток не найден" },
 };
 
 function isOver(candidate, threshold) {
   return threshold !== null && candidate.score >= threshold;
 }
 
-/* Кольцо цифрового отпечатка кандидата: проекция эмбеддинга на 128
- * направлений (см. fingerprint() в service/app.py). У снимков одной машины
- * кольца похожи. Лёгкое сглаживание делает форму читаемой. */
-function ringSvg(values, colour) {
-  if (!values || values.length < 8) return '<span class="candidate__ring"></span>';
-  const n = values.length;
-  const smooth = values.map((_, i) =>
-    [-2, -1, 0, 1, 2].reduce((sum, k) => sum + values[(i + k + n) % n] * Math.exp(-(k * k) / 2), 0));
-  const sorted = smooth.slice().sort((a, b) => a - b);
-  const low = sorted[Math.floor(n * 0.04)];
-  const high = sorted[Math.ceil(n * 0.96) - 1];
-  const span = high - low || 1;
-  const size = 38, c = size / 2, inner = 7, reach = 10;
-  let path = "";
-  smooth.forEach((value, i) => {
-    const v = Math.min(1, Math.max(0, (value - low) / span));
-    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const r2 = inner + 1.5 + reach * v;
-    path += `M${(c + Math.cos(a) * inner).toFixed(1)} ${(c + Math.sin(a) * inner).toFixed(1)}`
-          + `L${(c + Math.cos(a) * r2).toFixed(1)} ${(c + Math.sin(a) * r2).toFixed(1)}`;
+/* ---------- Номерной знак-отпечаток ----------
+ *
+ * Сервер отдаёт 128 проекций вектора машины на фиксированные направления
+ * (fingerprint() в service/app.py). Знак каждой проекции — один бит: полоса
+ * или просвет. Это SimHash: доля совпавших битов у двух снимков равна
+ * 1 − угол/π между их векторами, поэтому у одной машины штрихкоды почти
+ * одинаковые, а у разных расходятся. Штрихкод стоит в рамке номерного знака:
+ * это «номер», который нельзя размыть. Несовпавшие с запросом биты — красные. */
+
+const PRINT = { ink: "#111111", blue: "#1C4FD8", red: "#D7261E", white: "#FFFFFF" };
+
+function printBits(values) {
+  return values.map((value) => value > 0);
+}
+
+function printAgreement(values, reference) {
+  if (!values || !reference || values.length !== reference.length) return null;
+  const a = printBits(values), b = printBits(reference);
+  return { same: a.filter((bit, i) => bit === b[i]).length, total: a.length };
+}
+
+function plateSvg(values, { reference = null, label = "", tone = "ink", className = "plate" } = {}) {
+  if (!values || values.length < 8) return "";
+  const bits = printBits(values);
+  const ref = reference && reference.length === values.length ? printBits(reference) : null;
+  const W = 320, H = 68, pad = 10, region = 66;
+  const codeWidth = W - region - pad * 2;
+  const step = codeWidth / bits.length;
+  const top = pad, height = H - pad * 2;
+  const frame = tone === "blue" ? PRINT.blue : PRINT.ink;
+  let bars = "", misses = 0, run = null;
+  const rect = (from, to, colour) =>
+    `<rect x="${(pad + from * step).toFixed(2)}" y="${top}" width="${((to - from) * step).toFixed(2)}" height="${height}" fill="${colour}"/>`;
+  // Соседние полосы сливаются в одну, как у настоящего штрихкода.
+  const flush = (end) => { if (run !== null) { bars += rect(run, end, PRINT.ink); run = null; } };
+  bits.forEach((bit, i) => {
+    if (ref && ref[i] !== bit) {
+      flush(i);
+      bars += rect(i + 0.12, i + 0.88, PRINT.red);
+      misses += 1;
+      return;
+    }
+    if (bit) { if (run === null) run = i; } else flush(i);
   });
-  return `<svg class="candidate__ring" viewBox="0 0 ${size} ${size}" aria-hidden="true">`
-       + `<title>Цифровой отпечаток</title><path d="${path}" stroke="${colour}" stroke-width="1" fill="none"/></svg>`;
+  flush(bits.length);
+  const divider = W - region - 2;
+  const numeric = /^[\d.]+$/.test(label);
+  const text = label
+    ? `<text x="${divider + region / 2 + 1}" y="${numeric ? 36 : 33}" text-anchor="middle" font-family="Oswald, 'Arial Narrow', sans-serif"
+         font-weight="600" font-size="${numeric ? 24 : 14}" fill="${frame}">${escapeHtml(label)}</text>` : "";
+  const flag = `<g transform="translate(${divider + region / 2 - 11} 45)">
+      <rect width="22" height="4.4" fill="#FFFFFF" stroke="${PRINT.ink}" stroke-width="0.6"/>
+      <rect y="4.4" width="22" height="4.4" fill="#1C4FD8"/><rect y="8.8" width="22" height="4.4" fill="#D7261E"/></g>`;
+  const described = ref ? `совпало ${bits.length - misses} из ${bits.length} знаков` : `${bits.length} знаков`;
+  return `<svg class="${className}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Отпечаток машины: ${described}">
+    <rect x="1.5" y="1.5" width="${W - 3}" height="${H - 3}" rx="8" fill="${PRINT.white}" stroke="${frame}" stroke-width="3"/>
+    ${bars}
+    <line x1="${divider}" y1="1.5" x2="${divider}" y2="${H - 1.5}" stroke="${frame}" stroke-width="2"/>
+    ${text}${flag}
+  </svg>`;
+}
+
+/* Первый экран: как читать отпечаток — запрос и та же машина с другой камеры.
+ * Значения условные (генератор с фиксированным зерном): настоящие отпечатки
+ * появятся после первого поиска. */
+function renderHeroPlate() {
+  const box = $("hero-plate");
+  if (!box) return;
+  let seed = 20260918;
+  const next = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648) - 0.5;
+  const query = Array.from({ length: 128 }, next);
+  const same = query.map((value, i) => ([7, 23, 41, 58, 77, 90, 104, 119].includes(i) ? -value : value));
+  box.innerHTML = `
+    <div class="print-row__label"><span>Запрос · камера 12</span><span>128 знаков</span></div>
+    ${plateSvg(query, { label: "запрос" })}
+    <div class="print-row__label" style="margin-top:10px"><span>Та же машина · камера 47</span><span>совпало 120 из 128</span></div>
+    ${plateSvg(same, { reference: query, label: "0.98", tone: "blue" })}`;
 }
 
 function thumbHtml(candidate, className = "candidate__thumb") {
@@ -569,7 +624,8 @@ function renderShots(data) {
           <span class="candidate__id">${escapeHtml(candidate.image_id)}</span>
           <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
         </span>
-        ${ringSvg(candidate.fingerprint, over ? "#34c98b" : "#7cc4ff")}
+        ${plateSvg(candidate.fingerprint, { reference: data.fingerprint, label: candidate.score.toFixed(2),
+                                            tone: over ? "blue" : "ink", className: "plate plate--mini" })}
         <span class="candidate__score">${candidate.score.toFixed(3)}</span>
       </button></li>`;
   }).join("");
@@ -597,7 +653,8 @@ function renderVehicles(data) {
             <span class="group__meta">${count} ${plural(count, "снимок", "снимка", "снимков")} в десятке${
               threshold !== null ? ` · выше порога: ${over}` : ""}</span>
           </div>
-          ${ringSvg(best.candidate.fingerprint, over ? "#34c98b" : "#7cc4ff")}
+          ${plateSvg(best.candidate.fingerprint, { reference: data.fingerprint, label: best.candidate.score.toFixed(2),
+                                                   tone: over ? "blue" : "ink", className: "plate plate--group" })}
           <span class="group__score" title="Лучшее сходство">${best.candidate.score.toFixed(3)}</span>
         </div>
         <span class="bar"><span class="bar__fill" style="width:${width}%"></span></span>
@@ -647,6 +704,7 @@ function renderSearch(data) {
     + " · нажмите на снимок, чтобы сравнить";
   renderConfidence(data);
   renderCandidates();
+  renderQueryPrint(data);
   // При отказе подсказываем, что делать дальше. Разбор ошибок на публичном
   // тесте (docs/ERROR_ANALYSIS.md): почти все ложные отказы — машина видна не
   // целиком, её закрывает другая машина или люди. Совет следует из этого.
@@ -659,6 +717,16 @@ function renderSearch(data) {
   document.querySelector(".result-tools").hidden = !data.candidates.length;
   $("confidence").hidden = !data.candidates.length;
   showResultBody();
+}
+
+/* Отпечаток запроса под кадром: с ним сверяются штрихкоды кандидатов. */
+function renderQueryPrint(data) {
+  const box = $("query-print");
+  const plate = plateSvg(data?.fingerprint, { label: "запрос" });
+  box.hidden = !plate;
+  box.innerHTML = plate ? `
+    <div class="query-print__label"><span>Отпечаток запроса</span><span>${data.fingerprint.length} знаков</span></div>
+    ${plate}` : "";
 }
 
 function showResultBody() {
@@ -722,8 +790,23 @@ function openCompare(index) {
   $("compare-query").src = search.cropUrl;
   $("compare-candidate").src = candidate.thumbnail || "";
   $("compare-candidate-caption").textContent = candidate.image_id;
-  $("compare-explain").textContent = "Включите «куда смотрела модель», чтобы увидеть области запроса, "
-    + "на которые модель опиралась, сравнивая его с этим кандидатом (Grad-CAM).";
+  const agreement = printAgreement(candidate.fingerprint, search.data.fingerprint);
+  $("compare-prints").hidden = !agreement;
+  $("compare-prints").innerHTML = agreement ? `
+    <div>
+      <div class="print-row__label"><span>Отпечаток запроса</span><span>${agreement.total} знаков</span></div>
+      ${plateSvg(search.data.fingerprint, { label: "запрос" })}
+    </div>
+    <div>
+      <div class="print-row__label"><span>Отпечаток кандидата</span>
+        <span>совпало <b>${agreement.same} из ${agreement.total}</b></span></div>
+      ${plateSvg(candidate.fingerprint, { reference: search.data.fingerprint, label: candidate.score.toFixed(2),
+                                         tone: over ? "blue" : "ink" })}
+      <p class="compare-prints__verdict compare-prints__verdict--${over ? "match" : "miss"}">${
+        over ? "Отпечаток совпал" : "Отпечаток не совпал"}</p>
+    </div>` : "";
+  $("compare-explain").textContent = "Красные полосы — знаки отпечатка, в которых кандидат разошёлся с запросом. "
+    + "Включите «куда смотрела модель», чтобы увидеть области кадра, на которые модель опиралась (Grad-CAM).";
   $("compare").dataset.index = index;
   if (!$("compare").open) {
     $("compare-heat").checked = false;
@@ -779,7 +862,7 @@ $("compare-heat").addEventListener("change", async (event) => {
     if (Number($("compare").dataset.index) !== index || !event.target.checked) return;
     $("compare-query").src = `data:image/png;base64,${explain.overlay_png_base64}`;
     const check = explain.plate_check;
-    $("compare-explain").innerHTML = "Красным — области, сильнее всего повлиявшие на сходство с кандидатом."
+    $("compare-explain").innerHTML = "Тёплым цветом на кадре — области, сильнее всего повлиявшие на сходство с кандидатом."
       + (check ? ` Проверка номера: ${escapeHtml(check.verdict)}.` : "");
   } catch (error) {
     event.target.checked = false;
@@ -969,5 +1052,6 @@ function escapeHtml(value) {
 
 refreshStatus();
 loadGallery();
+renderHeroPlate();
 markStep(1);
 setInterval(refreshStatus, 15000);

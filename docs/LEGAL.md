@@ -112,7 +112,7 @@
 | FastAPI, Starlette, Pydantic, Uvicorn | MIT / BSD | можно |
 | PostgreSQL, pgvector | PostgreSQL License | можно |
 | nginx | BSD-2-Clause | можно |
-| Шрифты Unbounded, Manrope | SIL OFL 1.1 | можно |
+| Шрифты Oswald, Golos Text, JetBrains Mono | SIL OFL 1.1 | можно |
 | **VeRi-776** | доступ по заявке автору для некоммерческих исследований, без передачи третьим лицам ([EXTERNAL_DATA.md](EXTERNAL_DATA.md)) | **нет без разрешения правообладателя** |
 | Датасет конкурса | условия ЛЦТ | по условиям организатора |
 
