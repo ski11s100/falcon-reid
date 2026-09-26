@@ -21,7 +21,7 @@
 | Запуск | `docker compose up --build` → http://localhost:8000 | раздел 3 |
 | Файлы сдачи | [submission/](submission) — одна команда `run_submission.py` | раздел 4 |
 | Безопасность и закон | журнал обращений, срок хранения, данные не покидают контур заказчика | [docs/SECURITY.md](docs/SECURITY.md), [docs/LEGAL.md](docs/LEGAL.md) |
-| Презентация и запись показа | 22 слайда; запись 1 мин 43 с | [docs/presentation.pdf](docs/presentation.pdf), [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
+| Презентация и запись показа | 24 слайда; запись 1 мин 43 с | [docs/presentation.pdf](docs/presentation.pdf), [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
 
 ---
 
@@ -422,7 +422,7 @@ $env:FALCON_PROJECTION = "models/projection.pt"
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-145 тестов и линтер проходят на каждом пуше в GitHub Actions
+153 теста и линтер проходят на каждом пуше в GitHub Actions
 ([.github/workflows/tests.yml](.github/workflows/tests.yml)) вместе с
 `pip-audit`: на чистой машине ставятся зафиксированные версии, чтобы решение
 точно собиралось не только у нас. Набор правил линтера и причины отключений —
@@ -977,7 +977,7 @@ scripts/           обучение, сдача, разбор ошибок, за
   calibrate_threshold.py  порог отказа по жеребьёвкам и плотностям галереи
   compare_release.py   сдача против нового кандидата: вердикт по всем критериям
   verify_official.py   сверка с эталонным скриптом организаторов
-tests/             145 тестов
+tests/             153 теста
 docs/              разбор ошибок, безопасность, правовые вопросы, масштабируемость, отчёты
 legacy/            архив ранних версий v1–v4 (не участвует в сдаче, см. legacy/README.md)
 ```
