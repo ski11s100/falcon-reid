@@ -8,6 +8,19 @@
 его остаточные признаки под угрозой дисквалификации. Решение работает с
 формой кузова, цветом, геометрией, дисками, наклейками и повреждениями.
 
+### Материалы сдачи
+
+Команда «Агробизнесмены», РГАУ-МСХА имени К.А. Тимирязева. ЛЦТ 2026, задача 7 «Фалькон Тех».
+
+| Что | Где |
+|---|---|
+| Презентация | [docs/presentation.pdf](docs/presentation.pdf) |
+| Видео демонстрации (2 мин 18 с) | [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
+| Документация | этот README: архитектура (раздел 1), методы (2), запуск (3), сдача (4), метрики и порог (5, 6), источники (7) |
+| Запуск одной командой | `docker compose up --build`, интерфейс на http://localhost:8000, API на /docs |
+| Запуск без видеокарты | `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build` |
+| Файлы сдачи для публичного теста | [submission/](submission) |
+
 ### Коротко
 
 | Что | Значение | Где проверить |
@@ -22,7 +35,7 @@
 | Запуск | `docker compose up --build` → http://localhost:8000 | раздел 3 |
 | Файлы сдачи | [submission/](submission) — одна команда `run_submission.py` | раздел 4 |
 | Безопасность и закон | журнал обращений, срок хранения, данные не покидают контур заказчика | [docs/SECURITY.md](docs/SECURITY.md), [docs/LEGAL.md](docs/LEGAL.md) |
-| Презентация и запись показа | 28 слайдов на шаблоне ЛЦТ (обязательные слайды — в его оформлении); запись 1 мин 43 с | [docs/presentation.pdf](docs/presentation.pdf), [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
+| Презентация и запись показа | 28 слайдов на шаблоне ЛЦТ (обязательные слайды в его оформлении); запись показа 2 мин 18 с: поиск, сравнение, честный отказ, двойники и решение оператора | [docs/presentation.pdf](docs/presentation.pdf), [релиз demo-v1](https://github.com/ski11s100/falcon-reid/releases/tag/demo-v1) |
 
 ---
 
